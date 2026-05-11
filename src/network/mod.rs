@@ -102,3 +102,20 @@ fn run_iptables(args: &[&str]) -> Result<()> {
 
     Ok(())
 }
+
+pub fn cleanup_nat() -> Result<()> {
+    while run_iptables(&[
+        "-t",
+        "nat",
+        "-D",
+        "POSTROUTING",
+        "-s",
+        "10.0.0.0/24",
+        "-j",
+        "MASQUERADE",
+    ])
+    .is_ok()
+    {}
+
+    Ok(())
+}

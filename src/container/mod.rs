@@ -1,6 +1,6 @@
 use crate::cgroup::{Cgroup, CgroupConfig};
 use crate::filesystem::setup_rootfs;
-use crate::network::{setup_loopback, setup_nat, setup_veth_child, setup_veth_parent};
+use crate::network::{cleanup_nat, setup_loopback, setup_nat, setup_veth_child, setup_veth_parent};
 use anyhow::{bail, Context, Result};
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
@@ -64,6 +64,10 @@ pub fn run_process(
             close(write_fd).ok();
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
+
+            if child_flags.contains(CloneFlags::CLONE_NEWNET) {
+                cleanup_nat()?;
+            }
 
             match status {
                 WaitStatus::Exited(_, code) => {
