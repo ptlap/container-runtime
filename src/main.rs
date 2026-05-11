@@ -1,25 +1,37 @@
+use anyhow::Result;
+use clap::{Parser, Subcommand};
 use container_runtime::spec::config::load_config;
+use std::path::PathBuf;
 
-fn main() -> anyhow::Result<()> {
-    let config = load_config("examples/bundle/config.json")?;
+#[derive(Debug, Parser)]
+#[command(name = "crun")]
+#[command(about = "A minimal Linux container runtime written in Rust")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
 
-    println!("args: {:?}", config.process.args);
-    println!("env: {:?}", config.process.env);
-    println!("rootfs: {}", config.root.path);
+#[derive(Debug, Subcommand)]
+enum Command {
+    Run { bundle: PathBuf },
+}
 
-    if let Some(linux) = config.linux {
-        for ns in linux.namespaces {
-            println!("namespace: {}", ns.namespace_type);
-        }
+fn main() -> Result<()> {
+    let cli = Cli::parse();
 
-        if let Some(resources) = linux.resources {
-            if let Some(memory) = resources.memory {
-                println!("memory limit: {:?}", memory.limit);
-            }
+    match cli.command {
+        Command::Run { bundle } => {
+            let config_path = bundle.join("config.json");
+            let config = load_config(config_path)?;
 
-            if let Some(cpu) = resources.cpu {
-                println!("cpu quota: {:?}", cpu.quota);
-                println!("cpu period: {:?}", cpu.period);
+            println!("args: {:?}", config.process.args);
+            println!("env: {:?}", config.process.env);
+            println!("rootfs: {}", config.root.path);
+
+            if let Some(linux) = config.linux {
+                for ns in linux.namespaces {
+                    println!("namespaces: {}", ns.namespace_type);
+                }
             }
         }
     }
