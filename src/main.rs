@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use container_runtime::namespace::namespace_flags;
 use container_runtime::spec::config::load_config;
 use std::path::PathBuf;
 
@@ -29,9 +30,16 @@ fn main() -> Result<()> {
             println!("rootfs: {}", config.root.path);
 
             if let Some(linux) = config.linux {
-                for ns in linux.namespaces {
-                    println!("namespaces: {}", ns.namespace_type);
-                }
+                let namespaces: Vec<String> = linux
+                    .namespaces
+                    .into_iter()
+                    .map(|ns| ns.namespace_type)
+                    .collect();
+
+                let flags = namespace_flags(&namespaces);
+
+                println!("namespaces: {:?}", namespaces);
+                println!("clone flags: {:?}", flags)
             }
         }
     }
