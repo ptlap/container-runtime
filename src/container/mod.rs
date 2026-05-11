@@ -7,7 +7,12 @@ use nix::unistd::{execvp, fork, ForkResult};
 use std::ffi::CString;
 use std::path::Path;
 
-pub fn run_process(args: &[String], rootfs: &Path, flags: CloneFlags) -> Result<()> {
+pub fn run_process(
+    args: &[String],
+    env: &[String],
+    rootfs: &Path,
+    flags: CloneFlags,
+) -> Result<()> {
     if args.is_empty() {
         bail!("process args is empty");
     }
@@ -16,7 +21,7 @@ pub fn run_process(args: &[String], rootfs: &Path, flags: CloneFlags) -> Result<
 
     match unsafe { fork() }.context("failed to fork process")? {
         ForkResult::Child => {
-            if let Err(error) = run_child(args, rootfs) {
+            if let Err(error) = run_child(args, env, rootfs) {
                 eprintln!("container error: {error}");
                 std::process::exit(1);
             }
@@ -44,7 +49,7 @@ pub fn run_process(args: &[String], rootfs: &Path, flags: CloneFlags) -> Result<
     Ok(())
 }
 
-fn run_child(args: &[String], rootfs: &Path) -> Result<()> {
+fn run_child(args: &[String], env: &[String], rootfs: &Path) -> Result<()> {
     let command = CString::new(args[0].as_str()).context("invalid command")?;
 
     let c_args: Vec<CString> = args
@@ -57,10 +62,11 @@ fn run_child(args: &[String], rootfs: &Path) -> Result<()> {
 
     setup_rootfs(rootfs)?;
 
-    std::env::set_var(
-        "PATH",
-        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-    );
+    for item in env {
+        if let Some((key, value)) = item.split_once('=') {
+            std::env::set_var(key, value);
+        }
+    }
 
     execvp(&command, &c_args).context("failed to exec process")?;
 

@@ -54,7 +54,7 @@ fn run_container(bundle: PathBuf) -> Result<()> {
     println!("namespaces: {:?}", namespaces);
     println!("clone flags: {:?}", flags);
 
-    run_process(&config.process.args, &rootfs, flags)?;
+    run_process(&config.process.args, &config.process.env, &rootfs, flags)?;
 
     Ok(())
 }
