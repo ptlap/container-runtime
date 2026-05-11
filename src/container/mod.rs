@@ -23,10 +23,8 @@ pub fn run_process(
 
     let (read_fd, write_fd) = pipe().context("failed to create sync pipe")?;
 
-    // Parent chỉ giữ PID namespace
     let parent_flags = flags & CloneFlags::CLONE_NEWPID;
 
-    // Child nhận phần còn lại
     let mut child_flags = flags;
     child_flags.remove(CloneFlags::CLONE_NEWPID);
 
@@ -51,18 +49,15 @@ pub fn run_process(
 
             let cgroup = if let Some(config) = cgroup_config {
                 let cgroup = Cgroup::new(&format!("crun-{}", child.as_raw()), &config)?;
-
                 cgroup.add_process(child)?;
-
                 Some(cgroup)
             } else {
                 None
             };
 
-            // TODO: setup veth pair ở đây
+            // TODO: setup veth pair here before signaling child.
 
             write(&write_fd, &[1u8]).context("failed to signal child")?;
-
             close(write_fd).ok();
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
@@ -71,11 +66,9 @@ pub fn run_process(
                 WaitStatus::Exited(_, code) => {
                     println!("container process exited with code: {code}");
                 }
-
                 WaitStatus::Signaled(_, signal, _) => {
                     println!("container process killed by signal: {signal:?}");
                 }
-
                 other => {
                     println!("container process ended with status: {other:?}");
                 }
@@ -89,6 +82,7 @@ pub fn run_process(
 
     Ok(())
 }
+
 fn run_child(
     args: &[String],
     env: &[String],
@@ -97,8 +91,7 @@ fn run_child(
     child_flags: CloneFlags,
 ) -> Result<()> {
     if !child_flags.is_empty() {
-        unshare(child_flags)
-            .context("failed to unshare child namespaces")?;
+        unshare(child_flags).context("failed to unshare child namespaces")?;
     }
 
     if child_flags.contains(CloneFlags::CLONE_NEWNET) {
@@ -106,59 +99,7 @@ fn run_child(
     }
 
     let mut buf = [0u8; 1];
-
-    read(&read_fd, &mut buf)
-        .context("failed to wait for parent signal")?;
-
-    close(read_fd).ok();
-
-    let command =
-        CString::new(args[0].as_str()).context("invalid command")?;
-
-    let c_args: Vec<CString> = args
-        .iter()
-        .map(|arg| {
-            CString::new(arg.as_str())
-                .context("invalid process argument")
-        })
-        .collect::<Result<_>>()?;
-
-    mount::<str, str, str, str>(
-        None,
-        "/",
-        None,
-        MsFlags::MS_REC | MsFlags::MS_PRIVATE,
-        None,
-    )
-    .context("failed to make mounts private")?;
-
-    setup_rootfs(rootfs)?;
-
-    for item in env {
-        if let Some((key, value)) = item.split_once('=') {
-            std::env::set_var(key, value);
-        }
-    }
-
-    execvp(&command, &c_args)
-        .context("failed to exec process")?;
-
-    unreachable!();
-}
-) -> Result<()> {
-    if !child_flags.is_empty() {
-        unshare(child_flags).context("failed to unshare child namespaces")?;
-    }
-
-    if child_flags.contains(CloneFlags::CLONE_NEWET) {
-        setup_loopback()?;
-    }
-}
-
-    let mut buf = [0u8; 1];
-
     read(&read_fd, &mut buf).context("failed to wait for parent signal")?;
-
     close(read_fd).ok();
 
     let command = CString::new(args[0].as_str()).context("invalid command")?;
