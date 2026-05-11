@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use container_runtime::container::run_process;
 use container_runtime::namespace::namespace_flags;
 use container_runtime::spec::config::load_config;
 use std::path::PathBuf;
@@ -39,7 +40,8 @@ fn main() -> Result<()> {
                 let flags = namespace_flags(&namespaces);
 
                 println!("namespaces: {:?}", namespaces);
-                println!("clone flags: {:?}", flags)
+                println!("clone flags: {:?}", flags);
+                run_process(&config.process.args, flags)?;
             }
         }
     }
