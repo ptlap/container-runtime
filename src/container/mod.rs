@@ -1,6 +1,6 @@
 use crate::cgroup::{Cgroup, CgroupConfig};
 use crate::filesystem::setup_rootfs;
-use crate::network::setup_loopback;
+use crate::network::{setup_loopback, setup_veth_child, setup_veth_parent};
 use anyhow::{bail, Context, Result};
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
@@ -55,7 +55,9 @@ pub fn run_process(
                 None
             };
 
-            // TODO: setup veth pair here before signaling child.
+            if child_flags.contains(CloneFlags::CLONE_NEWNET) {
+                setup_veth_parent(child)?;
+            }
 
             write(&write_fd, &[1u8]).context("failed to signal child")?;
             close(write_fd).ok();
@@ -93,14 +95,14 @@ fn run_child(
     if !child_flags.is_empty() {
         unshare(child_flags).context("failed to unshare child namespaces")?;
     }
-
-    if child_flags.contains(CloneFlags::CLONE_NEWNET) {
-        setup_loopback()?;
-    }
-
     let mut buf = [0u8; 1];
     read(&read_fd, &mut buf).context("failed to wait for parent signal")?;
     close(read_fd).ok();
+
+    if child_flags.contains(CloneFlags::CLONE_NEWNET) {
+        setup_loopback()?;
+        setup_veth_child()?;
+    }
 
     let command = CString::new(args[0].as_str()).context("invalid command")?;
 
