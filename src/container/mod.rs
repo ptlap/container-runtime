@@ -1,3 +1,4 @@
+use crate::cgroup::{Cgroup, CgroupConfig};
 use crate::filesystem::setup_rootfs;
 use anyhow::{bail, Context, Result};
 use nix::mount::{mount, MsFlags};
@@ -12,6 +13,7 @@ pub fn run_process(
     env: &[String],
     rootfs: &Path,
     flags: CloneFlags,
+    cgroup_config: Option<CgroupConfig>,
 ) -> Result<()> {
     if args.is_empty() {
         bail!("process args is empty");
@@ -30,6 +32,14 @@ pub fn run_process(
         }
 
         ForkResult::Parent { child } => {
+            let cgroup = if let Some(config) = cgroup_config {
+                let cgroup = Cgroup::new(&format!("crun-{}", child.as_raw()), &config)?;
+                cgroup.add_process(child)?;
+                Some(cgroup)
+            } else {
+                None
+            };
+
             let status = waitpid(child, None).context("failed to wait for child process")?;
 
             match status {
@@ -42,6 +52,10 @@ pub fn run_process(
                 other => {
                     println!("container process ended with status: {other:?}");
                 }
+            }
+
+            if let Some(cgroup) = cgroup {
+                cgroup.delete()?;
             }
         }
     }

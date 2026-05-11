@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use container_runtime::cgroup::CgroupConfig;
 use container_runtime::container::run_process;
 use container_runtime::namespace::namespace_flags;
 use container_runtime::spec::config::load_config;
@@ -40,11 +41,12 @@ fn run_container(bundle: PathBuf) -> Result<()> {
 
     let namespaces = config
         .linux
+        .as_ref()
         .map(|linux| {
             linux
                 .namespaces
-                .into_iter()
-                .map(|ns| ns.namespace_type)
+                .iter()
+                .map(|ns| ns.namespace_type.clone())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -54,7 +56,21 @@ fn run_container(bundle: PathBuf) -> Result<()> {
     println!("namespaces: {:?}", namespaces);
     println!("clone flags: {:?}", flags);
 
-    run_process(&config.process.args, &config.process.env, &rootfs, flags)?;
+    let cgroup_config = config.linux.as_ref().and_then(|linux| {
+        linux.resources.as_ref().map(|resources| CgroupConfig {
+            memory_limit: resources.memory.as_ref().and_then(|m| m.limit),
+            cpu_quota: resources.cpu.as_ref().and_then(|c| c.quota),
+            cpu_period: resources.cpu.as_ref().and_then(|c| c.period),
+        })
+    });
+
+    run_process(
+        &config.process.args,
+        &config.process.env,
+        &rootfs,
+        flags,
+        cgroup_config,
+    )?;
 
     Ok(())
 }
