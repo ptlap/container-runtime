@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
+use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use nix::unistd::{chdir, pivot_root};
 use std::fs;
 use std::path::Path;
@@ -42,6 +43,44 @@ pub fn setup_rootfs(rootfs: &Path) -> Result<()> {
         None::<&str>,
     )
     .context("failed to mount proc")?;
+
+    setup_dev()?;
+
+    Ok(())
+}
+
+fn setup_dev() -> Result<()> {
+    fs::create_dir_all("/dev").context("failed to create /dev")?;
+
+    mount(
+        Some("tmpfs"),
+        "/dev",
+        Some("tmpfs"),
+        MsFlags::MS_NOSUID | MsFlags::MS_STRICTATIME,
+        Some("mode=755"),
+    )
+    .context("failed to mount tmpfs on /dev")?;
+
+    create_char_device("/dev/null", 1, 3, 0o666)?;
+    create_char_device("/dev/zero", 1, 5, 0o666)?;
+    create_char_device("/dev/random", 1, 8, 0o666)?;
+    create_char_device("/dev/urandom", 1, 9, 0o666)?;
+
+    Ok(())
+}
+
+fn create_char_device(path: &str, major: u64, minor: u64, mode: u32) -> Result<()> {
+    if Path::new(path).exists() {
+        return Ok(());
+    }
+
+    mknod(
+        Path::new(path),
+        SFlag::S_IFCHR,
+        Mode::from_bits_truncate(mode),
+        makedev(major, minor),
+    )
+    .with_context(|| format!("failed to create device node: {path}"))?;
 
     Ok(())
 }

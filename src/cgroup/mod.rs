@@ -56,15 +56,20 @@ impl Cgroup {
     }
 
     pub fn delete(&self) -> Result<()> {
-        // Đợi tất cả processes exit khỏi cgroup
         for _ in 0..10 {
             let procs = fs::read_to_string(self.path.join("cgroup.procs")).unwrap_or_default();
+
             if procs.trim().is_empty() {
                 break;
             }
+
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        fs::remove_dir(&self.path).context("failed to remove cgroup")?;
+
+        if self.path.exists() {
+            fs::remove_dir(&self.path).context("failed to remove cgroup")?;
+        }
+
         Ok(())
     }
 }
