@@ -44,6 +44,7 @@ pub fn setup_rootfs(rootfs: &Path) -> Result<()> {
     )
     .context("failed to mount proc")?;
 
+    setup_dns()?;
     setup_dev()?;
 
     Ok(())
@@ -81,6 +82,19 @@ fn create_char_device(path: &str, major: u64, minor: u64, mode: u32) -> Result<(
         makedev(major, minor),
     )
     .with_context(|| format!("failed to create device node: {path}"))?;
+
+    Ok(())
+}
+
+fn setup_dns() -> Result<()> {
+    fs::create_dir_all("/etc").context("failed to create /etc")?;
+
+    fs::write(
+        "/etc/resolv.conf",
+        "nameserver 1.1.1.1\nameserver
+         8.8.8.8\n",
+    )
+    .context("failed to write /etc/resolv.conf")?;
 
     Ok(())
 }
