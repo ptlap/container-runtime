@@ -15,7 +15,13 @@ name = "container_runtime"
 path = "src/lib.rs"
 
 [dependencies]
-nix = { version = "0.31", features = ["process", "mount", "sched", "user"] }
+nix = { version = "0.31", features = [
+  "process",
+  "mount",
+  "sched",
+  "user",
+  "fs",
+] }
 oci-spec = "0.7"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

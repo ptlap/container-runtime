@@ -22,29 +22,39 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { bundle } => {
-            let config_path = bundle.join("config.json");
-            let config = load_config(config_path)?;
-
-            println!("args: {:?}", config.process.args);
-            println!("env: {:?}", config.process.env);
-            println!("rootfs: {}", config.root.path);
-
-            if let Some(linux) = config.linux {
-                let namespaces: Vec<String> = linux
-                    .namespaces
-                    .into_iter()
-                    .map(|ns| ns.namespace_type)
-                    .collect();
-
-                let flags = namespace_flags(&namespaces);
-
-                println!("namespaces: {:?}", namespaces);
-                println!("clone flags: {:?}", flags);
-                run_process(&config.process.args, flags)?;
-            }
-        }
+        Command::Run { bundle } => run_container(bundle)?,
     }
+
+    Ok(())
+}
+
+fn run_container(bundle: PathBuf) -> Result<()> {
+    let config_path = bundle.join("config.json");
+    let config = load_config(config_path)?;
+
+    let rootfs = bundle.join(&config.root.path);
+
+    println!("args: {:?}", config.process.args);
+    println!("env: {:?}", config.process.env);
+    println!("rootfs: {}", rootfs.display());
+
+    let namespaces = config
+        .linux
+        .map(|linux| {
+            linux
+                .namespaces
+                .into_iter()
+                .map(|ns| ns.namespace_type)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let flags = namespace_flags(&namespaces);
+
+    println!("namespaces: {:?}", namespaces);
+    println!("clone flags: {:?}", flags);
+
+    run_process(&config.process.args, &rootfs, flags)?;
 
     Ok(())
 }

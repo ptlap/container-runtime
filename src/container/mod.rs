@@ -1,11 +1,13 @@
+use crate::filesystem::setup_rootfs;
 use anyhow::{bail, Context, Result};
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{execvp, fork, ForkResult};
 use std::ffi::CString;
+use std::path::Path;
 
-pub fn run_process(args: &[String], flags: CloneFlags) -> Result<()> {
+pub fn run_process(args: &[String], rootfs: &Path, flags: CloneFlags) -> Result<()> {
     if args.is_empty() {
         bail!("process args is empty");
     }
@@ -14,32 +16,10 @@ pub fn run_process(args: &[String], flags: CloneFlags) -> Result<()> {
 
     match unsafe { fork() }.context("failed to fork process")? {
         ForkResult::Child => {
-            let command = CString::new(args[0].as_str()).context("invalid command")?;
-
-            let c_args: Vec<CString> = args
-                .iter()
-                .map(|arg| CString::new(arg.as_str()).context("invalid process argument"))
-                .collect::<Result<_>>()?;
-
-            mount::<str, str, str, str>(
-                None,
-                "/",
-                None,
-                MsFlags::MS_REC | MsFlags::MS_PRIVATE,
-                None,
-            )
-            .context("failed to make mounts private")?;
-
-            mount(
-                Some("proc"),
-                "/proc",
-                Some("proc"),
-                MsFlags::empty(),
-                None::<&str>,
-            )
-            .context("failed to mount proc")?;
-
-            execvp(&command, &c_args).context("failed to exec process")?;
+            if let Err(error) = run_child(args, rootfs) {
+                eprintln!("container error: {error}");
+                std::process::exit(1);
+            }
 
             unreachable!();
         }
@@ -49,17 +29,40 @@ pub fn run_process(args: &[String], flags: CloneFlags) -> Result<()> {
 
             match status {
                 WaitStatus::Exited(_, code) => {
-                    println!("container process exited with code: {}", code);
+                    println!("container process exited with code: {code}");
                 }
                 WaitStatus::Signaled(_, signal, _) => {
-                    println!("container process killed by signal: {:?}", signal);
+                    println!("container process killed by signal: {signal:?}");
                 }
                 other => {
-                    println!("container process ended with status: {:?}", other);
+                    println!("container process ended with status: {other:?}");
                 }
             }
         }
     }
 
     Ok(())
+}
+
+fn run_child(args: &[String], rootfs: &Path) -> Result<()> {
+    let command = CString::new(args[0].as_str()).context("invalid command")?;
+
+    let c_args: Vec<CString> = args
+        .iter()
+        .map(|arg| CString::new(arg.as_str()).context("invalid process argument"))
+        .collect::<Result<_>>()?;
+
+    mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
+        .context("failed to make mounts private")?;
+
+    setup_rootfs(rootfs)?;
+
+    std::env::set_var(
+        "PATH",
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    );
+
+    execvp(&command, &c_args).context("failed to exec process")?;
+
+    unreachable!();
 }
