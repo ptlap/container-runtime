@@ -22,6 +22,8 @@ pub struct ContainerState {
     pub cgroup_path: Option<String>,
     #[serde(default = "default_network_mode")]
     pub network_mode: String,
+    #[serde(default = "default_security_profile")]
+    pub security_profile: String,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub exit_code: Option<i32>,
@@ -35,6 +37,7 @@ impl ContainerState {
         pid: i32,
         cgroup_path: Option<String>,
         network_mode: &str,
+        security_profile: &str,
     ) -> Result<Self> {
         validate_id(id)?;
         let now = unix_timestamp()?;
@@ -46,6 +49,7 @@ impl ContainerState {
             bundle: bundle.display().to_string(),
             cgroup_path,
             network_mode: network_mode.to_string(),
+            security_profile: security_profile.to_string(),
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -64,6 +68,10 @@ impl ContainerState {
 
 fn default_network_mode() -> String {
     "bridge".to_string()
+}
+
+fn default_security_profile() -> String {
+    "default".to_string()
 }
 
 pub fn load(id: &str) -> Result<ContainerState> {
@@ -169,6 +177,7 @@ mod tests {
             1234,
             Some("/sys/fs/cgroup/container-runtime/crun-1234".to_string()),
             "bridge",
+            "default",
         )
         .expect("state should be valid");
         save_to(&root, &state).expect("state should save");
@@ -182,6 +191,7 @@ mod tests {
             Some("/sys/fs/cgroup/container-runtime/crun-1234")
         );
         assert_eq!(loaded.network_mode, "bridge");
+        assert_eq!(loaded.security_profile, "default");
 
         state.mark_stopped(Some(0), None).expect("mark stopped");
         save_to(&root, &state).expect("stopped state should save");

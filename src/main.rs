@@ -4,6 +4,7 @@ use container_runtime::cgroup::{read_stats, CgroupConfig};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
+use container_runtime::security::SecurityProfile;
 use container_runtime::spec::config::load_config;
 use container_runtime::state::{self, ContainerState, ContainerStatus};
 use nix::sched::CloneFlags;
@@ -23,6 +24,8 @@ enum Command {
     Run {
         #[arg(long, value_enum, default_value_t = CliNetworkMode::Bridge)]
         net: CliNetworkMode,
+        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Default)]
+        security: CliSecurityProfile,
         id: String,
         bundle: PathBuf,
     },
@@ -48,6 +51,12 @@ enum CliNetworkMode {
     Bridge,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSecurityProfile {
+    Default,
+    Unconfined,
+}
+
 impl From<CliNetworkMode> for NetworkMode {
     fn from(value: CliNetworkMode) -> Self {
         match value {
@@ -58,11 +67,25 @@ impl From<CliNetworkMode> for NetworkMode {
     }
 }
 
+impl From<CliSecurityProfile> for SecurityProfile {
+    fn from(value: CliSecurityProfile) -> Self {
+        match value {
+            CliSecurityProfile::Default => Self::Default,
+            CliSecurityProfile::Unconfined => Self::Unconfined,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { net, id, bundle } => run_container(id, bundle, net.into())?,
+        Command::Run {
+            net,
+            security,
+            id,
+            bundle,
+        } => run_container(id, bundle, net.into(), security.into())?,
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
         Command::Delete { id } => delete_container(&id)?,
@@ -71,7 +94,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_container(id: String, bundle: PathBuf, network_mode: NetworkMode) -> Result<()> {
+fn run_container(
+    id: String,
+    bundle: PathBuf,
+    network_mode: NetworkMode,
+    security_profile: SecurityProfile,
+) -> Result<()> {
     if state::exists(&id)? {
         bail!("container id already exists: {id}");
     }
@@ -102,6 +130,7 @@ fn run_container(id: String, bundle: PathBuf, network_mode: NetworkMode) -> Resu
     println!("namespaces: {:?}", namespaces);
     println!("clone flags: {:?}", flags);
     println!("network mode: {}", network_mode.as_str());
+    println!("security profile: {}", security_profile.as_str());
 
     let cgroup_config = config.linux.as_ref().and_then(|linux| {
         linux.resources.as_ref().map(|resources| CgroupConfig {
@@ -123,6 +152,7 @@ fn run_container(id: String, bundle: PathBuf, network_mode: NetworkMode) -> Resu
             started.pid,
             cgroup_path,
             network_mode.as_str(),
+            security_profile.as_str(),
         )?;
         state::save(&state)?;
         running_state = Some(state);
@@ -138,6 +168,7 @@ fn run_container(id: String, bundle: PathBuf, network_mode: NetworkMode) -> Resu
         flags,
         cgroup_config,
         network_mode,
+        security_profile,
     };
 
     let process_exit = run_process(process_config, &mut save_started_state)?;
@@ -170,6 +201,7 @@ fn show_state(id: &str, json: bool) -> Result<()> {
             state.cgroup_path.as_deref().unwrap_or("-")
         );
         println!("network_mode: {}", state.network_mode);
+        println!("security_profile: {}", state.security_profile);
         println!("created_at_unix: {}", state.created_at_unix);
         println!("updated_at_unix: {}", state.updated_at_unix);
         if let Some(code) = state.exit_code {

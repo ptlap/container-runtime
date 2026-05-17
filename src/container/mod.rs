@@ -4,6 +4,7 @@ use crate::network::{
     cleanup_nat, cleanup_veth_host, setup_loopback, setup_nat, setup_veth_child, setup_veth_parent,
     NetworkMode, VethPair,
 };
+use crate::security::{self, SecurityProfile};
 use anyhow::{bail, Context, Result};
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
@@ -29,6 +30,7 @@ pub struct ProcessConfig<'a> {
     pub flags: CloneFlags,
     pub cgroup_config: Option<CgroupConfig>,
     pub network_mode: NetworkMode,
+    pub security_profile: SecurityProfile,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +46,7 @@ struct ChildConfig<'a> {
     rootfs: &'a Path,
     readonly_rootfs: bool,
     network_mode: NetworkMode,
+    security_profile: SecurityProfile,
     child_flags: CloneFlags,
 }
 
@@ -77,6 +80,7 @@ pub fn run_process(
                 rootfs: config.rootfs,
                 readonly_rootfs: config.readonly_rootfs,
                 network_mode: config.network_mode,
+                security_profile: config.security_profile,
                 child_flags,
             };
 
@@ -198,6 +202,8 @@ fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
     if let Some(cwd) = config.cwd {
         chdir(cwd).with_context(|| format!("failed to chdir to process cwd: {cwd}"))?;
     }
+
+    security::apply(config.security_profile)?;
 
     for item in config.env {
         if let Some((key, value)) = item.split_once('=') {

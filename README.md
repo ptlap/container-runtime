@@ -1,16 +1,67 @@
 # container-runtime
 
-A minimal Linux container runtime written in Rust.
+A minimal Linux container runtime written in Rust for studying how containers are
+built from kernel primitives: namespaces, cgroups v2, rootfs isolation, and
+process execution.
 
-## Goals
+This project is an educational mini-runtime, not a Docker replacement and not a
+production-ready OCI runtime.
 
-- Learn Linux namespaces
-- Implement basic container lifecycle
-- Support cgroups v2 resource limits
-- Support rootfs isolation with pivot_root
-- Parse a subset of OCI config.json
-- Benchmark against runc/youki/Docker
+## Features
 
-## Status
+- Parse a small OCI-like `config.json` subset.
+- Isolate PID, mount, UTS, IPC, and network namespaces.
+- Switch rootfs with `pivot_root`.
+- Apply cgroups v2 memory and CPU limits.
+- Inspect cgroup stats while a container is running.
+- Support network modes: `bridge`, `none`, and `host`.
+- Support security profiles: `default` and `unconfined`.
+- Store runtime state under `/run/crun-rs/<id>/state.json`.
 
-Initial project structure.
+## Requirements
+
+- Linux host with cgroups v2.
+- Root privileges for namespace, mount, cgroup, and network operations.
+- `ip` from iproute2.
+- `iptables` for bridge-mode NAT.
+
+## Build
+
+```bash
+cargo build --release
+cargo test
+cargo clippy --all-targets --all-features
+```
+
+## Run
+
+```bash
+sudo target/release/crun run --net bridge --security default demo examples/bundle
+```
+
+Useful commands from another terminal:
+
+```bash
+sudo target/release/crun state demo --json
+sudo target/release/crun stats demo --json
+sudo target/release/crun delete demo
+```
+
+Network modes:
+
+- `bridge`: isolated network namespace with veth, `eth0`, and NAT.
+- `none`: isolated network namespace with loopback only.
+- `host`: host network namespace, no `CLONE_NEWNET`.
+
+Security profiles:
+
+- `default`: enables Linux `no_new_privs` before `exec`.
+- `unconfined`: skips runtime security hardening for debugging.
+
+## Current Limits
+
+- OCI support is partial.
+- No seccomp or capability dropping yet.
+- User namespace UID/GID mapping is not implemented.
+- Bridge mode still uses a fixed `10.0.0.0/24` subnet.
+- The runtime expects an existing unpacked rootfs; it does not pull images.
