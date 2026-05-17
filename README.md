@@ -56,13 +56,15 @@ Network modes:
 Security profiles:
 
 - `default`: enables Linux `no_new_privs` and clears effective, permitted, and
-  inheritable capabilities before `exec`.
+  inheritable capabilities before `exec`. It also installs a small seccomp
+  denylist for host-impacting syscalls such as `mount`, `ptrace`, `bpf`,
+  `keyctl`, module loading, and reboot operations.
 - `unconfined`: skips runtime security hardening for debugging.
 
 ## Current Limits
 
 - OCI support is partial.
-- No seccomp profile yet.
+- Seccomp is a small denylist, not a complete production allowlist.
 - User namespace UID/GID mapping is not implemented.
 - Bridge mode still uses a fixed `10.0.0.0/24` subnet.
 - The runtime expects an existing unpacked rootfs; it does not pull images.
