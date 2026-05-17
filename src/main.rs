@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::cgroup::{read_stats, CgroupConfig};
 use container_runtime::container::{run_process, ProcessConfig};
+use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::security::SecurityProfile;
@@ -58,6 +59,11 @@ enum Command {
     Ps {
         #[arg(long)]
         json: bool,
+    },
+    Exec {
+        id: String,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     Kill {
         id: String,
@@ -144,6 +150,7 @@ fn main() -> Result<()> {
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
         Command::Ps { json } => list_containers(json)?,
+        Command::Exec { id, args } => exec_container(&id, &args)?,
         Command::Kill { id, signal } => kill_container(&id, &signal)?,
         Command::Stop { id, timeout } => stop_container(&id, timeout)?,
         Command::Delete { id } => delete_container(&id)?,
@@ -415,6 +422,35 @@ fn list_containers(json: bool) -> Result<()> {
             state.security_profile,
             state.bundle
         );
+    }
+
+    Ok(())
+}
+
+fn exec_container(id: &str, args: &[String]) -> Result<()> {
+    let state = state::load(id)?;
+    if state.status != ContainerStatus::Running {
+        bail!("container {id} is not running");
+    }
+
+    let Some(pid) = state.pid else {
+        bail!("container {id} has no pid");
+    };
+
+    let config = load_config(PathBuf::from(&state.bundle).join("config.json"))?;
+
+    let exit = exec_in_container(ExecConfig {
+        target_pid: pid,
+        args,
+        env: &config.process.env,
+        cwd: config.process.cwd.as_deref(),
+        cgroup_path: state.cgroup_path.as_deref(),
+    })?;
+
+    match (exit.code, exit.signal) {
+        (Some(code), _) => println!("exec process exited with code: {code}"),
+        (None, Some(signal)) => println!("exec process killed by signal: {signal}"),
+        (None, None) => println!("exec process ended without exit status"),
     }
 
     Ok(())
