@@ -1,10 +1,12 @@
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::cgroup::{read_stats, CgroupConfig};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::namespace::namespace_flags;
+use container_runtime::network::NetworkMode;
 use container_runtime::spec::config::load_config;
 use container_runtime::state::{self, ContainerState, ContainerStatus};
+use nix::sched::CloneFlags;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -19,6 +21,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Run {
+        #[arg(long, value_enum, default_value_t = CliNetworkMode::Bridge)]
+        net: CliNetworkMode,
         id: String,
         bundle: PathBuf,
     },
@@ -37,11 +41,28 @@ enum Command {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliNetworkMode {
+    Host,
+    None,
+    Bridge,
+}
+
+impl From<CliNetworkMode> for NetworkMode {
+    fn from(value: CliNetworkMode) -> Self {
+        match value {
+            CliNetworkMode::Host => Self::Host,
+            CliNetworkMode::None => Self::None,
+            CliNetworkMode::Bridge => Self::Bridge,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Run { id, bundle } => run_container(id, bundle)?,
+        Command::Run { net, id, bundle } => run_container(id, bundle, net.into())?,
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
         Command::Delete { id } => delete_container(&id)?,
@@ -50,7 +71,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_container(id: String, bundle: PathBuf) -> Result<()> {
+fn run_container(id: String, bundle: PathBuf, network_mode: NetworkMode) -> Result<()> {
     if state::exists(&id)? {
         bail!("container id already exists: {id}");
     }
@@ -76,10 +97,11 @@ fn run_container(id: String, bundle: PathBuf) -> Result<()> {
         })
         .unwrap_or_default();
 
-    let flags = namespace_flags(&namespaces);
+    let flags = apply_network_mode(namespace_flags(&namespaces), network_mode);
 
     println!("namespaces: {:?}", namespaces);
     println!("clone flags: {:?}", flags);
+    println!("network mode: {}", network_mode.as_str());
 
     let cgroup_config = config.linux.as_ref().and_then(|linux| {
         linux.resources.as_ref().map(|resources| CgroupConfig {
@@ -95,7 +117,13 @@ fn run_container(id: String, bundle: PathBuf) -> Result<()> {
             .cgroup_path
             .as_ref()
             .map(|path| path.display().to_string());
-        let state = ContainerState::running(&id, &bundle, started.pid, cgroup_path)?;
+        let state = ContainerState::running(
+            &id,
+            &bundle,
+            started.pid,
+            cgroup_path,
+            network_mode.as_str(),
+        )?;
         state::save(&state)?;
         running_state = Some(state);
         Ok(())
@@ -109,6 +137,7 @@ fn run_container(id: String, bundle: PathBuf) -> Result<()> {
         readonly_rootfs: config.root.readonly,
         flags,
         cgroup_config,
+        network_mode,
     };
 
     let process_exit = run_process(process_config, &mut save_started_state)?;
@@ -140,6 +169,7 @@ fn show_state(id: &str, json: bool) -> Result<()> {
             "cgroup_path: {}",
             state.cgroup_path.as_deref().unwrap_or("-")
         );
+        println!("network_mode: {}", state.network_mode);
         println!("created_at_unix: {}", state.created_at_unix);
         println!("updated_at_unix: {}", state.updated_at_unix);
         if let Some(code) = state.exit_code {
@@ -151,6 +181,15 @@ fn show_state(id: &str, json: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn apply_network_mode(mut flags: CloneFlags, network_mode: NetworkMode) -> CloneFlags {
+    match network_mode {
+        NetworkMode::Host => flags.remove(CloneFlags::CLONE_NEWNET),
+        NetworkMode::None | NetworkMode::Bridge => flags.insert(CloneFlags::CLONE_NEWNET),
+    }
+
+    flags
 }
 
 fn show_stats(id: &str, json: bool) -> Result<()> {

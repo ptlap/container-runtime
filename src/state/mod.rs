@@ -20,6 +20,8 @@ pub struct ContainerState {
     pub status: ContainerStatus,
     pub bundle: String,
     pub cgroup_path: Option<String>,
+    #[serde(default = "default_network_mode")]
+    pub network_mode: String,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub exit_code: Option<i32>,
@@ -27,7 +29,13 @@ pub struct ContainerState {
 }
 
 impl ContainerState {
-    pub fn running(id: &str, bundle: &Path, pid: i32, cgroup_path: Option<String>) -> Result<Self> {
+    pub fn running(
+        id: &str,
+        bundle: &Path,
+        pid: i32,
+        cgroup_path: Option<String>,
+        network_mode: &str,
+    ) -> Result<Self> {
         validate_id(id)?;
         let now = unix_timestamp()?;
 
@@ -37,6 +45,7 @@ impl ContainerState {
             status: ContainerStatus::Running,
             bundle: bundle.display().to_string(),
             cgroup_path,
+            network_mode: network_mode.to_string(),
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -51,6 +60,10 @@ impl ContainerState {
         self.signal = signal;
         Ok(())
     }
+}
+
+fn default_network_mode() -> String {
+    "bridge".to_string()
 }
 
 pub fn load(id: &str) -> Result<ContainerState> {
@@ -155,6 +168,7 @@ mod tests {
             Path::new("/tmp/bundle"),
             1234,
             Some("/sys/fs/cgroup/container-runtime/crun-1234".to_string()),
+            "bridge",
         )
         .expect("state should be valid");
         save_to(&root, &state).expect("state should save");
@@ -167,6 +181,7 @@ mod tests {
             loaded.cgroup_path.as_deref(),
             Some("/sys/fs/cgroup/container-runtime/crun-1234")
         );
+        assert_eq!(loaded.network_mode, "bridge");
 
         state.mark_stopped(Some(0), None).expect("mark stopped");
         save_to(&root, &state).expect("stopped state should save");

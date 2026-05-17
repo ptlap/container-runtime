@@ -1,9 +1,28 @@
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::process::{Command, Stdio};
 
 const CONTAINER_IFACE: &str = "eth0";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkMode {
+    Host,
+    None,
+    Bridge,
+}
+
+impl NetworkMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::None => "none",
+            Self::Bridge => "bridge",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VethPair {
@@ -181,5 +200,12 @@ mod tests {
         assert_eq!(veth.peer_name, "vethp12345");
         assert!(veth.host_name.len() <= 15);
         assert!(veth.peer_name.len() <= 15);
+    }
+
+    #[test]
+    fn formats_network_modes_for_state() {
+        assert_eq!(NetworkMode::Host.as_str(), "host");
+        assert_eq!(NetworkMode::None.as_str(), "none");
+        assert_eq!(NetworkMode::Bridge.as_str(), "bridge");
     }
 }

@@ -2,7 +2,7 @@ use crate::cgroup::{Cgroup, CgroupConfig};
 use crate::filesystem::setup_rootfs;
 use crate::network::{
     cleanup_nat, cleanup_veth_host, setup_loopback, setup_nat, setup_veth_child, setup_veth_parent,
-    VethPair,
+    NetworkMode, VethPair,
 };
 use anyhow::{bail, Context, Result};
 use nix::mount::{mount, MsFlags};
@@ -28,12 +28,23 @@ pub struct ProcessConfig<'a> {
     pub readonly_rootfs: bool,
     pub flags: CloneFlags,
     pub cgroup_config: Option<CgroupConfig>,
+    pub network_mode: NetworkMode,
 }
 
 #[derive(Debug, Clone)]
 pub struct StartedProcess {
     pub pid: i32,
     pub cgroup_path: Option<PathBuf>,
+}
+
+struct ChildConfig<'a> {
+    args: &'a [String],
+    env: &'a [String],
+    cwd: Option<&'a str>,
+    rootfs: &'a Path,
+    readonly_rootfs: bool,
+    network_mode: NetworkMode,
+    child_flags: CloneFlags,
 }
 
 pub fn run_process(
@@ -59,15 +70,17 @@ pub fn run_process(
         ForkResult::Child => {
             close(write_fd).ok();
 
-            if let Err(error) = run_child(
-                config.args,
-                config.env,
-                config.cwd,
-                config.rootfs,
-                config.readonly_rootfs,
-                read_fd,
+            let child_config = ChildConfig {
+                args: config.args,
+                env: config.env,
+                cwd: config.cwd,
+                rootfs: config.rootfs,
+                readonly_rootfs: config.readonly_rootfs,
+                network_mode: config.network_mode,
                 child_flags,
-            ) {
+            };
+
+            if let Err(error) = run_child(child_config, read_fd) {
                 eprintln!("container error: {error}");
                 std::process::exit(1);
             }
@@ -87,7 +100,7 @@ pub fn run_process(
                 None
             };
 
-            let veth = if child_flags.contains(CloneFlags::CLONE_NEWNET) {
+            let veth = if config.network_mode == NetworkMode::Bridge {
                 let veth = VethPair::for_pid(child_pid);
                 setup_veth_parent(child, &veth)?;
                 setup_nat()?;
@@ -110,7 +123,7 @@ pub fn run_process(
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
 
-            if child_flags.contains(CloneFlags::CLONE_NEWNET) {
+            if config.network_mode == NetworkMode::Bridge {
                 cleanup_nat()?;
                 if let Some(veth) = &veth {
                     cleanup_veth_host(&veth.host_name).ok();
@@ -156,28 +169,23 @@ pub fn run_process(
     Ok(process_exit)
 }
 
-fn run_child(
-    args: &[String],
-    env: &[String],
-    cwd: Option<&str>,
-    rootfs: &Path,
-    readonly_rootfs: bool,
-    read_fd: OwnedFd,
-    child_flags: CloneFlags,
-) -> Result<()> {
-    if !child_flags.is_empty() {
-        unshare(child_flags).context("failed to unshare child namespaces")?;
+fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
+    if !config.child_flags.is_empty() {
+        unshare(config.child_flags).context("failed to unshare child namespaces")?;
     }
     let peer_name = read_parent_signal(read_fd).context("failed to wait for parent signal")?;
 
-    if child_flags.contains(CloneFlags::CLONE_NEWNET) {
+    if config.child_flags.contains(CloneFlags::CLONE_NEWNET) {
         setup_loopback()?;
-        setup_veth_child(&peer_name)?;
+        if config.network_mode == NetworkMode::Bridge {
+            setup_veth_child(&peer_name)?;
+        }
     }
 
-    let command = CString::new(args[0].as_str()).context("invalid command")?;
+    let command = CString::new(config.args[0].as_str()).context("invalid command")?;
 
-    let c_args: Vec<CString> = args
+    let c_args: Vec<CString> = config
+        .args
         .iter()
         .map(|arg| CString::new(arg.as_str()).context("invalid process argument"))
         .collect::<Result<_>>()?;
@@ -185,13 +193,13 @@ fn run_child(
     mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
         .context("failed to make mounts private")?;
 
-    setup_rootfs(rootfs, readonly_rootfs)?;
+    setup_rootfs(config.rootfs, config.readonly_rootfs)?;
 
-    if let Some(cwd) = cwd {
+    if let Some(cwd) = config.cwd {
         chdir(cwd).with_context(|| format!("failed to chdir to process cwd: {cwd}"))?;
     }
 
-    for item in env {
+    for item in config.env {
         if let Some((key, value)) = item.split_once('=') {
             std::env::set_var(key, value);
         }
