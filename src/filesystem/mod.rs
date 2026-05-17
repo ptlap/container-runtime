@@ -108,8 +108,7 @@ fn setup_dns() -> Result<()> {
 
     fs::write(
         "/etc/resolv.conf",
-        "nameserver 1.1.1.1\nameserver
-         8.8.8.8\n",
+        "nameserver 1.1.1.1\nnameserver 8.8.8.8\n",
     )
     .context("failed to write /etc/resolv.conf")?;
 

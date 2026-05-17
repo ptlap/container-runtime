@@ -115,6 +115,10 @@ pub fn load(id: &str) -> Result<ContainerState> {
     load_from(Path::new(DEFAULT_STATE_ROOT), id)
 }
 
+pub fn load_current(id: &str) -> Result<ContainerState> {
+    load_current_from(Path::new(DEFAULT_STATE_ROOT), id)
+}
+
 pub fn save(state: &ContainerState) -> Result<()> {
     save_to(Path::new(DEFAULT_STATE_ROOT), state)
 }
@@ -142,6 +146,12 @@ fn load_from(root: &Path, id: &str) -> Result<ContainerState> {
     Ok(state)
 }
 
+fn load_current_from(root: &Path, id: &str) -> Result<ContainerState> {
+    let mut state = load_from(root, id)?;
+    refresh_liveness(root, &mut state)?;
+    Ok(state)
+}
+
 fn list_from(root: &Path) -> Result<Vec<ContainerState>> {
     if !root.exists() {
         return Ok(Vec::new());
@@ -161,11 +171,47 @@ fn list_from(root: &Path) -> Result<Vec<ContainerState>> {
         }
 
         let id = entry.file_name().to_string_lossy().into_owned();
-        states.push(load_from(root, &id)?);
+        states.push(load_current_from(root, &id)?);
     }
 
     states.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(states)
+}
+
+fn refresh_liveness(root: &Path, state: &mut ContainerState) -> Result<()> {
+    if state.status != ContainerStatus::Running {
+        return Ok(());
+    }
+
+    let Some(pid) = state.pid else {
+        state.mark_stopped(None, Some("STALE".to_string()))?;
+        save_to(root, state)?;
+        return Ok(());
+    };
+
+    if pid_is_alive(pid) {
+        return Ok(());
+    }
+
+    state.mark_stopped(None, Some("STALE".to_string()))?;
+    save_to(root, state)
+}
+
+fn pid_is_alive(pid: i32) -> bool {
+    let proc_dir = Path::new("/proc").join(pid.to_string());
+    if !proc_dir.exists() {
+        return false;
+    }
+
+    let Ok(stat) = fs::read_to_string(proc_dir.join("stat")) else {
+        return true;
+    };
+
+    let Some((_, after_comm)) = stat.rsplit_once(") ") else {
+        return true;
+    };
+
+    !after_comm.starts_with('Z')
 }
 
 fn save_to(root: &Path, state: &ContainerState) -> Result<()> {
@@ -180,7 +226,7 @@ fn save_to(root: &Path, state: &ContainerState) -> Result<()> {
 }
 
 fn delete_from(root: &Path, id: &str) -> Result<()> {
-    let state = load_from(root, id)?;
+    let state = load_current_from(root, id)?;
     if state.status == ContainerStatus::Running {
         bail!("container {id} is running; stop it before delete");
     }
@@ -320,5 +366,31 @@ mod tests {
         let states = list_from(&root).expect("missing root should list as empty");
 
         assert!(states.is_empty());
+    }
+
+    #[test]
+    fn load_current_marks_missing_running_pid_as_stale() {
+        let root = std::env::temp_dir().join(format!("crun-rs-stale-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let state = ContainerState::running(
+            "stale",
+            Path::new("/tmp/bundle"),
+            -1,
+            Some("/sys/fs/cgroup/container-runtime/crun-stale".to_string()),
+            "bridge",
+            "default",
+        )
+        .expect("running state should be valid");
+        save_to(&root, &state).expect("state should save");
+
+        let loaded = load_current_from(&root, "stale").expect("state should refresh");
+
+        assert_eq!(loaded.status, ContainerStatus::Stopped);
+        assert_eq!(loaded.pid, None);
+        assert_eq!(loaded.cgroup_path, None);
+        assert_eq!(loaded.signal.as_deref(), Some("STALE"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

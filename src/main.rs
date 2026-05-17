@@ -187,7 +187,7 @@ fn create_container(options: RunOptions) -> Result<()> {
 }
 
 fn start_container(id: &str) -> Result<()> {
-    let state = state::load(id)?;
+    let state = state::load_current(id)?;
     if state.status != ContainerStatus::Created {
         bail!("container {id} is not created");
     }
@@ -313,7 +313,7 @@ fn parse_security_profile(value: &str) -> Result<SecurityProfile> {
 }
 
 fn show_state(id: &str, json: bool) -> Result<()> {
-    let state = state::load(id)?;
+    let state = state::load_current(id)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&state)?);
@@ -354,7 +354,7 @@ fn apply_network_mode(mut flags: CloneFlags, network_mode: NetworkMode) -> Clone
 }
 
 fn show_stats(id: &str, json: bool) -> Result<()> {
-    let state = state::load(id)?;
+    let state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
         bail!("container {id} is not running");
     }
@@ -428,7 +428,7 @@ fn list_containers(json: bool) -> Result<()> {
 }
 
 fn exec_container(id: &str, args: &[String]) -> Result<()> {
-    let state = state::load(id)?;
+    let state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
         bail!("container {id} is not running");
     }
@@ -457,7 +457,7 @@ fn exec_container(id: &str, args: &[String]) -> Result<()> {
 }
 
 fn kill_container(id: &str, signal: &str) -> Result<()> {
-    let state = state::load(id)?;
+    let state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
         bail!("container {id} is not running");
     }
@@ -498,7 +498,7 @@ fn wait_for_stopped(id: &str, timeout: Duration) -> Result<bool> {
     let deadline = Instant::now() + timeout;
 
     loop {
-        if state::load(id)?.status == ContainerStatus::Stopped {
+        if state::load_current(id)?.status == ContainerStatus::Stopped {
             return Ok(true);
         }
 
