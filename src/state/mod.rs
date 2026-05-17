@@ -128,6 +128,10 @@ pub fn exists(id: &str) -> Result<bool> {
     Ok(state_file(Path::new(DEFAULT_STATE_ROOT), id).exists())
 }
 
+pub fn list() -> Result<Vec<ContainerState>> {
+    list_from(Path::new(DEFAULT_STATE_ROOT))
+}
+
 fn load_from(root: &Path, id: &str) -> Result<ContainerState> {
     validate_id(id)?;
     let path = state_file(root, id);
@@ -136,6 +140,32 @@ fn load_from(root: &Path, id: &str) -> Result<ContainerState> {
     let state = serde_json::from_str(&content).context("failed to parse state file")?;
 
     Ok(state)
+}
+
+fn list_from(root: &Path) -> Result<Vec<ContainerState>> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut states = Vec::new();
+    for entry in fs::read_dir(root)
+        .with_context(|| format!("failed to read state root: {}", root.display()))?
+    {
+        let entry = entry.context("failed to read state directory entry")?;
+        if !entry
+            .file_type()
+            .context("failed to read state directory entry type")?
+            .is_dir()
+        {
+            continue;
+        }
+
+        let id = entry.file_name().to_string_lossy().into_owned();
+        states.push(load_from(root, &id)?);
+    }
+
+    states.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(states)
 }
 
 fn save_to(root: &Path, state: &ContainerState) -> Result<()> {
@@ -255,5 +285,40 @@ mod tests {
 
         delete_from(&root, "demo-created").expect("created state should delete");
         assert!(!container_dir(&root, "demo-created").exists());
+    }
+
+    #[test]
+    fn lists_container_states_sorted_by_id() {
+        let root = std::env::temp_dir().join(format!("crun-rs-list-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let beta = ContainerState::created("beta", Path::new("/tmp/beta"), "bridge", "default")
+            .expect("beta state should be valid");
+        let alpha = ContainerState::created("alpha", Path::new("/tmp/alpha"), "none", "default")
+            .expect("alpha state should be valid");
+
+        save_to(&root, &beta).expect("beta state should save");
+        save_to(&root, &alpha).expect("alpha state should save");
+
+        let states = list_from(&root).expect("states should list");
+        let ids = states
+            .iter()
+            .map(|state| state.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["alpha", "beta"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lists_empty_when_state_root_does_not_exist() {
+        let root =
+            std::env::temp_dir().join(format!("crun-rs-missing-list-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let states = list_from(&root).expect("missing root should list as empty");
+
+        assert!(states.is_empty());
     }
 }

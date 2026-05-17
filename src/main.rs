@@ -55,6 +55,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Ps {
+        #[arg(long)]
+        json: bool,
+    },
     Kill {
         id: String,
         #[arg(long, default_value = DEFAULT_SIGNAL)]
@@ -139,6 +143,7 @@ fn main() -> Result<()> {
         Command::Start { id } => start_container(&id)?,
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
+        Command::Ps { json } => list_containers(json)?,
         Command::Kill { id, signal } => kill_container(&id, &signal)?,
         Command::Stop { id, timeout } => stop_container(&id, timeout)?,
         Command::Delete { id } => delete_container(&id)?,
@@ -383,6 +388,33 @@ fn show_stats(id: &str, json: bool) -> Result<()> {
         if let Some(value) = stats.pids_max {
             println!("pids_max: {value}");
         }
+    }
+
+    Ok(())
+}
+
+fn list_containers(json: bool) -> Result<()> {
+    let states = state::list()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&states)?);
+        return Ok(());
+    }
+
+    println!(
+        "{:<24} {:<10} {:<8} {:<8} {:<11} BUNDLE",
+        "ID", "STATUS", "PID", "NET", "SECURITY"
+    );
+    for state in states {
+        println!(
+            "{:<24} {:<10} {:<8} {:<8} {:<11} {}",
+            state.id,
+            format!("{:?}", state.status).to_lowercase(),
+            state.pid.map_or("-".to_string(), |pid| pid.to_string()),
+            state.network_mode,
+            state.security_profile,
+            state.bundle
+        );
     }
 
     Ok(())
