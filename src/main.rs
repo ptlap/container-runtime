@@ -5,6 +5,7 @@ use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::security::SecurityProfile;
+use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
 use container_runtime::spec::config::load_config;
 use container_runtime::state::{self, ContainerState, ContainerStatus};
 use nix::sched::CloneFlags;
@@ -49,6 +50,11 @@ enum Command {
         id: String,
         #[arg(long)]
         json: bool,
+    },
+    Kill {
+        id: String,
+        #[arg(long, default_value = DEFAULT_SIGNAL)]
+        signal: String,
     },
     Delete {
         id: String,
@@ -124,6 +130,7 @@ fn main() -> Result<()> {
         Command::Start { id } => start_container(&id)?,
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
+        Command::Kill { id, signal } => kill_container(&id, &signal)?,
         Command::Delete { id } => delete_container(&id)?,
     }
 
@@ -367,6 +374,25 @@ fn show_stats(id: &str, json: bool) -> Result<()> {
             println!("pids_max: {value}");
         }
     }
+
+    Ok(())
+}
+
+fn kill_container(id: &str, signal: &str) -> Result<()> {
+    let state = state::load(id)?;
+    if state.status != ContainerStatus::Running {
+        bail!("container {id} is not running");
+    }
+
+    let Some(pid) = state.pid else {
+        bail!("container {id} has no pid");
+    };
+
+    let signal_number = parse_signal(signal)?;
+    send_signal(pid, signal_number).with_context(|| {
+        format!("failed to send signal {signal} ({signal_number}) to container {id} pid {pid}")
+    })?;
+    println!("sent signal {signal} to container {id} pid {pid}");
 
     Ok(())
 }

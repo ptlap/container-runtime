@@ -52,6 +52,7 @@ Useful commands from another terminal:
 ```bash
 sudo target/release/crun state demo --json
 sudo target/release/crun stats demo --json
+sudo target/release/crun kill demo --signal SIGTERM
 sudo target/release/crun delete demo
 ```
 
