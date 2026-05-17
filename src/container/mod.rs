@@ -19,6 +19,7 @@ pub struct ProcessExit {
     pub pid: i32,
     pub code: Option<i32>,
     pub signal: Option<String>,
+    pub error: Option<String>,
 }
 
 pub struct ProcessConfig<'a> {
@@ -59,6 +60,7 @@ pub fn run_process(
     }
 
     let (read_fd, write_fd) = pipe().context("failed to create sync pipe")?;
+    let (error_read_fd, error_write_fd) = pipe().context("failed to create child error pipe")?;
 
     let parent_flags = config.flags & CloneFlags::CLONE_NEWPID;
 
@@ -72,6 +74,7 @@ pub fn run_process(
     let process_exit = match unsafe { fork() }.context("failed to fork process")? {
         ForkResult::Child => {
             close(write_fd).ok();
+            close(error_read_fd).ok();
 
             let child_config = ChildConfig {
                 args: config.args,
@@ -86,6 +89,8 @@ pub fn run_process(
 
             if let Err(error) = run_child(child_config, read_fd) {
                 eprintln!("container error: {error}");
+                write_child_error(&error_write_fd, &error).ok();
+                close(error_write_fd).ok();
                 std::process::exit(1);
             }
 
@@ -94,6 +99,7 @@ pub fn run_process(
 
         ForkResult::Parent { child } => {
             close(read_fd).ok();
+            close(error_write_fd).ok();
             let child_pid = child.as_raw();
 
             let cgroup = if let Some(cgroup_config) = config.cgroup_config {
@@ -128,6 +134,7 @@ pub fn run_process(
             close(write_fd).ok();
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
+            let child_error = read_child_error(error_read_fd)?;
 
             if config.network_mode == NetworkMode::Bridge {
                 if let Some(network) = &bridge_network {
@@ -157,22 +164,53 @@ pub fn run_process(
                     pid: child_pid,
                     code: Some(code),
                     signal: None,
+                    error: child_error,
                 },
                 WaitStatus::Signaled(_, signal, _) => ProcessExit {
                     pid: child_pid,
                     code: None,
                     signal: Some(format!("{signal:?}")),
+                    error: child_error,
                 },
                 other => ProcessExit {
                     pid: child_pid,
                     code: None,
                     signal: Some(format!("{other:?}")),
+                    error: child_error,
                 },
             }
         }
     };
 
     Ok(process_exit)
+}
+
+fn write_child_error(error_write_fd: &OwnedFd, error: &anyhow::Error) -> Result<()> {
+    let message = error.to_string();
+    write_all(error_write_fd, message.as_bytes()).context("failed to write child error")
+}
+
+fn write_all(fd: &OwnedFd, mut bytes: &[u8]) -> Result<()> {
+    while !bytes.is_empty() {
+        let count = write(fd, bytes).context("failed to write fd")?;
+        if count == 0 {
+            bail!("failed to write fd: wrote zero bytes");
+        }
+        bytes = &bytes[count..];
+    }
+
+    Ok(())
+}
+
+fn read_child_error(error_read_fd: OwnedFd) -> Result<Option<String>> {
+    let message = read_fd_to_string(error_read_fd).context("failed to read child error")?;
+    let message = message.trim().to_string();
+
+    if message.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(message))
+    }
 }
 
 fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
@@ -221,6 +259,10 @@ fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
 }
 
 fn read_parent_signal(read_fd: OwnedFd) -> Result<String> {
+    read_fd_to_string(read_fd).context("parent signal was not valid UTF-8")
+}
+
+fn read_fd_to_string(read_fd: OwnedFd) -> Result<String> {
     let mut bytes = Vec::new();
     let mut buf = [0u8; 64];
 
@@ -234,5 +276,5 @@ fn read_parent_signal(read_fd: OwnedFd) -> Result<String> {
 
     close(read_fd).ok();
 
-    String::from_utf8(bytes).context("parent signal was not valid UTF-8")
+    String::from_utf8(bytes).context("fd content was not valid UTF-8")
 }

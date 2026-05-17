@@ -286,12 +286,17 @@ fn execute_container(
     let process_exit = run_process(process_config, &mut save_started_state)?;
     let exit_code = process_exit.code;
     let exit_signal = process_exit.signal.clone();
+    let child_error = process_exit.error.clone();
 
     if let Some(mut state) = running_state {
         state
             .mark_stopped(exit_code, exit_signal.clone())
             .context("failed to update stopped state")?;
         state::save(&state)?;
+    }
+
+    if let Some(error) = child_error {
+        bail!("container child failed: {error}");
     }
 
     exit_with_process_status(exit_code, exit_signal.as_deref());
