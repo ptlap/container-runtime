@@ -5,7 +5,7 @@ use nix::unistd::{chdir, pivot_root};
 use std::fs;
 use std::path::Path;
 
-pub fn setup_rootfs(rootfs: &Path) -> Result<()> {
+pub fn setup_rootfs(rootfs: &Path, readonly: bool) -> Result<()> {
     mount(
         Some(rootfs),
         rootfs,
@@ -46,6 +46,23 @@ pub fn setup_rootfs(rootfs: &Path) -> Result<()> {
 
     setup_dns()?;
     setup_dev()?;
+
+    if readonly {
+        remount_root_readonly()?;
+    }
+
+    Ok(())
+}
+
+fn remount_root_readonly() -> Result<()> {
+    mount::<str, str, str, str>(
+        None,
+        "/",
+        None,
+        MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+        None,
+    )
+    .context("failed to remount rootfs readonly")?;
 
     Ok(())
 }

@@ -15,6 +15,7 @@ pub fn run_process(
     env: &[String],
     cwd: Option<&str>,
     rootfs: &Path,
+    readonly_rootfs: bool,
     flags: CloneFlags,
     cgroup_config: Option<CgroupConfig>,
 ) -> Result<()> {
@@ -37,7 +38,15 @@ pub fn run_process(
         ForkResult::Child => {
             close(write_fd).ok();
 
-            if let Err(error) = run_child(args, env, cwd, rootfs, read_fd, child_flags) {
+            if let Err(error) = run_child(
+                args,
+                env,
+                cwd,
+                rootfs,
+                readonly_rootfs,
+                read_fd,
+                child_flags,
+            ) {
                 eprintln!("container error: {error}");
                 std::process::exit(1);
             }
@@ -96,6 +105,7 @@ fn run_child(
     env: &[String],
     cwd: Option<&str>,
     rootfs: &Path,
+    readonly_rootfs: bool,
     read_fd: OwnedFd,
     child_flags: CloneFlags,
 ) -> Result<()> {
@@ -121,7 +131,7 @@ fn run_child(
     mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
         .context("failed to make mounts private")?;
 
-    setup_rootfs(rootfs)?;
+    setup_rootfs(rootfs, readonly_rootfs)?;
 
     if let Some(cwd) = cwd {
         chdir(cwd).with_context(|| format!("failed to chdir to process cwd: {cwd}"))?;

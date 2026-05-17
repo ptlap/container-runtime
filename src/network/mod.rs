@@ -1,17 +1,14 @@
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub fn setup_loopback() -> Result<()> {
     run_ip(&["link", "set", "lo", "up"])
 }
 
 pub fn setup_veth_parent(child_pid: Pid) -> Result<()> {
-    Command::new("ip")
-        .args(["link", "delete", "veth-host"])
-        .status()
-        .ok();
+    run_ip_quiet(&["link", "delete", "veth-host"]).ok();
 
     run_ip(&[
         "link",
@@ -59,10 +56,25 @@ fn run_ip(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+fn run_ip_quiet(args: &[&str]) -> Result<()> {
+    let status = Command::new("ip")
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to execute ip {}", args.join(" ")))?;
+
+    if !status.success() {
+        anyhow::bail!("ip command failed: {}", args.join(" "));
+    }
+
+    Ok(())
+}
+
 pub fn setup_nat() -> Result<()> {
     fs::write("/proc/sys/net/ipv4/ip_forward", "1").context("failed to enable ipv4 forwarding")?;
 
-    run_iptables(&[
+    run_iptables_quiet(&[
         "-t",
         "nat",
         "-D",
@@ -103,8 +115,23 @@ fn run_iptables(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+fn run_iptables_quiet(args: &[&str]) -> Result<()> {
+    let status = Command::new("iptables")
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to execute iptables {}", args.join(" ")))?;
+
+    if !status.success() {
+        anyhow::bail!("iptables command failed: {}", args.join(" "));
+    }
+
+    Ok(())
+}
+
 pub fn cleanup_nat() -> Result<()> {
-    while run_iptables(&[
+    while run_iptables_quiet(&[
         "-t",
         "nat",
         "-D",
