@@ -2,7 +2,7 @@ use crate::cgroup::{Cgroup, CgroupConfig};
 use crate::filesystem::setup_rootfs;
 use crate::network::{
     cleanup_nat, cleanup_veth_host, setup_loopback, setup_nat, setup_veth_child, setup_veth_parent,
-    NetworkMode, VethPair,
+    BridgeNetwork, NetworkMode,
 };
 use crate::security::{self, SecurityProfile};
 use anyhow::{bail, Context, Result};
@@ -104,11 +104,11 @@ pub fn run_process(
                 None
             };
 
-            let veth = if config.network_mode == NetworkMode::Bridge {
-                let veth = VethPair::for_pid(child_pid);
-                setup_veth_parent(child, &veth)?;
-                setup_nat()?;
-                Some(veth)
+            let bridge_network = if config.network_mode == NetworkMode::Bridge {
+                let network = BridgeNetwork::for_pid(child_pid);
+                setup_veth_parent(child, &network)?;
+                setup_nat(&network.subnet)?;
+                Some(network)
             } else {
                 None
             };
@@ -118,19 +118,21 @@ pub fn run_process(
                 cgroup_path: cgroup.as_ref().map(|cgroup| cgroup.path().to_path_buf()),
             })?;
 
-            let peer_name = veth
+            let signal = bridge_network
                 .as_ref()
-                .map(|veth| veth.peer_name.as_str())
-                .unwrap_or("");
-            write(&write_fd, peer_name.as_bytes()).context("failed to signal child")?;
+                .map(serde_json::to_string)
+                .transpose()
+                .context("failed to serialize bridge network config")?
+                .unwrap_or_default();
+            write(&write_fd, signal.as_bytes()).context("failed to signal child")?;
             close(write_fd).ok();
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
 
             if config.network_mode == NetworkMode::Bridge {
-                cleanup_nat()?;
-                if let Some(veth) = &veth {
-                    cleanup_veth_host(&veth.host_name).ok();
+                if let Some(network) = &bridge_network {
+                    cleanup_nat(&network.subnet)?;
+                    cleanup_veth_host(&network.veth.host_name).ok();
                 }
             }
 
@@ -177,12 +179,14 @@ fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
     if !config.child_flags.is_empty() {
         unshare(config.child_flags).context("failed to unshare child namespaces")?;
     }
-    let peer_name = read_parent_signal(read_fd).context("failed to wait for parent signal")?;
+    let signal = read_parent_signal(read_fd).context("failed to wait for parent signal")?;
 
     if config.child_flags.contains(CloneFlags::CLONE_NEWNET) {
         setup_loopback()?;
         if config.network_mode == NetworkMode::Bridge {
-            setup_veth_child(&peer_name)?;
+            let network: BridgeNetwork =
+                serde_json::from_str(&signal).context("failed to parse bridge network config")?;
+            setup_veth_child(&network)?;
         }
     }
 

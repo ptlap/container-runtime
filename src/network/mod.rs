@@ -24,10 +24,33 @@ impl NetworkMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VethPair {
     pub host_name: String,
     pub peer_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BridgeNetwork {
+    pub veth: VethPair,
+    pub subnet: String,
+    pub host_cidr: String,
+    pub container_cidr: String,
+    pub gateway: String,
+}
+
+impl BridgeNetwork {
+    pub fn for_pid(pid: i32) -> Self {
+        let octet = bridge_octet(pid);
+
+        Self {
+            veth: VethPair::for_pid(pid),
+            subnet: format!("10.88.{octet}.0/24"),
+            host_cidr: format!("10.88.{octet}.1/24"),
+            container_cidr: format!("10.88.{octet}.2/24"),
+            gateway: format!("10.88.{octet}.1"),
+        }
+    }
 }
 
 impl VethPair {
@@ -39,43 +62,65 @@ impl VethPair {
     }
 }
 
+fn bridge_octet(pid: i32) -> u8 {
+    ((pid.unsigned_abs() % 200) + 20) as u8
+}
+
 pub fn setup_loopback() -> Result<()> {
     run_ip(&["link", "set", "lo", "up"])
 }
 
-pub fn setup_veth_parent(child_pid: Pid, veth: &VethPair) -> Result<()> {
-    run_ip_quiet(&["link", "delete", &veth.host_name]).ok();
+pub fn setup_veth_parent(child_pid: Pid, network: &BridgeNetwork) -> Result<()> {
+    run_ip_quiet(&["link", "delete", &network.veth.host_name]).ok();
 
     run_ip(&[
         "link",
         "add",
-        &veth.host_name,
+        &network.veth.host_name,
         "type",
         "veth",
         "peer",
         "name",
-        &veth.peer_name,
+        &network.veth.peer_name,
     ])?;
 
     run_ip(&[
         "link",
         "set",
-        &veth.peer_name,
+        &network.veth.peer_name,
         "netns",
         &child_pid.as_raw().to_string(),
     ])?;
 
-    run_ip(&["addr", "add", "10.0.0.1/24", "dev", &veth.host_name])?;
-    run_ip(&["link", "set", &veth.host_name, "up"])?;
+    run_ip(&[
+        "addr",
+        "add",
+        &network.host_cidr,
+        "dev",
+        &network.veth.host_name,
+    ])?;
+    run_ip(&["link", "set", &network.veth.host_name, "up"])?;
 
     Ok(())
 }
 
-pub fn setup_veth_child(peer_name: &str) -> Result<()> {
-    run_ip(&["link", "set", peer_name, "name", CONTAINER_IFACE])?;
-    run_ip(&["addr", "add", "10.0.0.2/24", "dev", CONTAINER_IFACE])?;
+pub fn setup_veth_child(network: &BridgeNetwork) -> Result<()> {
+    run_ip(&[
+        "link",
+        "set",
+        &network.veth.peer_name,
+        "name",
+        CONTAINER_IFACE,
+    ])?;
+    run_ip(&[
+        "addr",
+        "add",
+        &network.container_cidr,
+        "dev",
+        CONTAINER_IFACE,
+    ])?;
     run_ip(&["link", "set", CONTAINER_IFACE, "up"])?;
-    run_ip(&["route", "add", "default", "via", "10.0.0.1"])?;
+    run_ip(&["route", "add", "default", "via", &network.gateway])?;
 
     Ok(())
 }
@@ -112,7 +157,7 @@ fn run_ip_quiet(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-pub fn setup_nat() -> Result<()> {
+pub fn setup_nat(subnet: &str) -> Result<()> {
     fs::write("/proc/sys/net/ipv4/ip_forward", "1").context("failed to enable ipv4 forwarding")?;
 
     run_iptables_quiet(&[
@@ -121,7 +166,7 @@ pub fn setup_nat() -> Result<()> {
         "-D",
         "POSTROUTING",
         "-s",
-        "10.0.0.0/24",
+        subnet,
         "-j",
         "MASQUERADE",
     ])
@@ -133,7 +178,7 @@ pub fn setup_nat() -> Result<()> {
         "-A",
         "POSTROUTING",
         "-s",
-        "10.0.0.0/24",
+        subnet,
         "-j",
         "MASQUERADE",
     ])?;
@@ -171,14 +216,14 @@ fn run_iptables_quiet(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-pub fn cleanup_nat() -> Result<()> {
+pub fn cleanup_nat(subnet: &str) -> Result<()> {
     while run_iptables_quiet(&[
         "-t",
         "nat",
         "-D",
         "POSTROUTING",
         "-s",
-        "10.0.0.0/24",
+        subnet,
         "-j",
         "MASQUERADE",
     ])
@@ -200,6 +245,18 @@ mod tests {
         assert_eq!(veth.peer_name, "vethp12345");
         assert!(veth.host_name.len() <= 15);
         assert!(veth.peer_name.len() <= 15);
+    }
+
+    #[test]
+    fn generates_bridge_network_from_pid() {
+        let network = BridgeNetwork::for_pid(12345);
+
+        assert_eq!(network.veth.host_name, "vethh12345");
+        assert_eq!(network.veth.peer_name, "vethp12345");
+        assert_eq!(network.subnet, "10.88.165.0/24");
+        assert_eq!(network.host_cidr, "10.88.165.1/24");
+        assert_eq!(network.container_cidr, "10.88.165.2/24");
+        assert_eq!(network.gateway, "10.88.165.1");
     }
 
     #[test]
