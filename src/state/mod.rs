@@ -19,6 +19,7 @@ pub struct ContainerState {
     pub pid: Option<i32>,
     pub status: ContainerStatus,
     pub bundle: String,
+    pub cgroup_path: Option<String>,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub exit_code: Option<i32>,
@@ -26,7 +27,7 @@ pub struct ContainerState {
 }
 
 impl ContainerState {
-    pub fn running(id: &str, bundle: &Path, pid: i32) -> Result<Self> {
+    pub fn running(id: &str, bundle: &Path, pid: i32, cgroup_path: Option<String>) -> Result<Self> {
         validate_id(id)?;
         let now = unix_timestamp()?;
 
@@ -35,6 +36,7 @@ impl ContainerState {
             pid: Some(pid),
             status: ContainerStatus::Running,
             bundle: bundle.display().to_string(),
+            cgroup_path,
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -148,14 +150,23 @@ mod tests {
         let root = std::env::temp_dir().join(format!("crun-rs-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
 
-        let mut state = ContainerState::running("demo", Path::new("/tmp/bundle"), 1234)
-            .expect("state should be valid");
+        let mut state = ContainerState::running(
+            "demo",
+            Path::new("/tmp/bundle"),
+            1234,
+            Some("/sys/fs/cgroup/container-runtime/crun-1234".to_string()),
+        )
+        .expect("state should be valid");
         save_to(&root, &state).expect("state should save");
 
         let loaded = load_from(&root, "demo").expect("state should load");
         assert_eq!(loaded.id, "demo");
         assert_eq!(loaded.pid, Some(1234));
         assert_eq!(loaded.status, ContainerStatus::Running);
+        assert_eq!(
+            loaded.cgroup_path.as_deref(),
+            Some("/sys/fs/cgroup/container-runtime/crun-1234")
+        );
 
         state.mark_stopped(Some(0), None).expect("mark stopped");
         save_to(&root, &state).expect("stopped state should save");

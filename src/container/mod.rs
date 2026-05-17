@@ -8,7 +8,7 @@ use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{chdir, close, execvp, fork, pipe, read, write, ForkResult};
 use std::ffi::CString;
 use std::os::fd::OwnedFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct ProcessExit {
@@ -27,9 +27,15 @@ pub struct ProcessConfig<'a> {
     pub cgroup_config: Option<CgroupConfig>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StartedProcess {
+    pub pid: i32,
+    pub cgroup_path: Option<PathBuf>,
+}
+
 pub fn run_process(
     config: ProcessConfig<'_>,
-    on_started: &mut dyn FnMut(i32) -> Result<()>,
+    on_started: &mut dyn FnMut(StartedProcess) -> Result<()>,
 ) -> Result<ProcessExit> {
     if config.args.is_empty() {
         bail!("process args is empty");
@@ -83,7 +89,10 @@ pub fn run_process(
                 setup_nat()?;
             }
 
-            on_started(child_pid)?;
+            on_started(StartedProcess {
+                pid: child_pid,
+                cgroup_path: cgroup.as_ref().map(|cgroup| cgroup.path().to_path_buf()),
+            })?;
 
             write(&write_fd, &[1u8]).context("failed to signal child")?;
             close(write_fd).ok();

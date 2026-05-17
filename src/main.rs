@@ -1,10 +1,11 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use container_runtime::cgroup::CgroupConfig;
+use container_runtime::cgroup::{read_stats, CgroupConfig};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::namespace::namespace_flags;
 use container_runtime::spec::config::load_config;
-use container_runtime::state::{self, ContainerState};
+use container_runtime::state::{self, ContainerState, ContainerStatus};
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -26,6 +27,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Stats {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     Delete {
         id: String,
     },
@@ -37,6 +43,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Run { id, bundle } => run_container(id, bundle)?,
         Command::State { id, json } => show_state(&id, json)?,
+        Command::Stats { id, json } => show_stats(&id, json)?,
         Command::Delete { id } => delete_container(&id)?,
     }
 
@@ -83,8 +90,12 @@ fn run_container(id: String, bundle: PathBuf) -> Result<()> {
     });
 
     let mut running_state = None;
-    let mut save_started_state = |pid| {
-        let state = ContainerState::running(&id, &bundle, pid)?;
+    let mut save_started_state = |started: container_runtime::container::StartedProcess| {
+        let cgroup_path = started
+            .cgroup_path
+            .as_ref()
+            .map(|path| path.display().to_string());
+        let state = ContainerState::running(&id, &bundle, started.pid, cgroup_path)?;
         state::save(&state)?;
         running_state = Some(state);
         Ok(())
@@ -125,6 +136,10 @@ fn show_state(id: &str, json: bool) -> Result<()> {
             state.pid.map_or("-".to_string(), |pid| pid.to_string())
         );
         println!("bundle: {}", state.bundle);
+        println!(
+            "cgroup_path: {}",
+            state.cgroup_path.as_deref().unwrap_or("-")
+        );
         println!("created_at_unix: {}", state.created_at_unix);
         println!("updated_at_unix: {}", state.updated_at_unix);
         if let Some(code) = state.exit_code {
@@ -132,6 +147,53 @@ fn show_state(id: &str, json: bool) -> Result<()> {
         }
         if let Some(signal) = state.signal {
             println!("signal: {signal}");
+        }
+    }
+
+    Ok(())
+}
+
+fn show_stats(id: &str, json: bool) -> Result<()> {
+    let state = state::load(id)?;
+    if state.status != ContainerStatus::Running {
+        bail!("container {id} is not running");
+    }
+
+    let Some(cgroup_path) = state.cgroup_path.as_deref() else {
+        bail!("container {id} has no cgroup path");
+    };
+
+    let cgroup_path = Path::new(cgroup_path);
+    if !cgroup_path.exists() {
+        bail!("cgroup path does not exist: {}", cgroup_path.display());
+    }
+
+    let stats = read_stats(cgroup_path)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&stats)?);
+    } else {
+        println!("id: {id}");
+        println!("cgroup_path: {}", stats.path);
+        if let Some(value) = stats.memory_current {
+            println!("memory_current: {value}");
+        }
+        if let Some(value) = stats.memory_max {
+            println!("memory_max: {value}");
+        }
+        if let Some(value) = stats.cpu_usage_usec {
+            println!("cpu_usage_usec: {value}");
+        }
+        if let Some(value) = stats.cpu_user_usec {
+            println!("cpu_user_usec: {value}");
+        }
+        if let Some(value) = stats.cpu_system_usec {
+            println!("cpu_system_usec: {value}");
+        }
+        if let Some(value) = stats.pids_current {
+            println!("pids_current: {value}");
+        }
+        if let Some(value) = stats.pids_max {
+            println!("pids_max: {value}");
         }
     }
 
