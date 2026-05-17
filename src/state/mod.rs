@@ -9,6 +9,7 @@ pub const DEFAULT_STATE_ROOT: &str = "/run/crun-rs";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ContainerStatus {
+    Created,
     Running,
     Stopped,
 }
@@ -31,6 +32,30 @@ pub struct ContainerState {
 }
 
 impl ContainerState {
+    pub fn created(
+        id: &str,
+        bundle: &Path,
+        network_mode: &str,
+        security_profile: &str,
+    ) -> Result<Self> {
+        validate_id(id)?;
+        let now = unix_timestamp()?;
+
+        Ok(Self {
+            id: id.to_string(),
+            pid: None,
+            status: ContainerStatus::Created,
+            bundle: bundle.display().to_string(),
+            cgroup_path: None,
+            network_mode: network_mode.to_string(),
+            security_profile: security_profile.to_string(),
+            created_at_unix: now,
+            updated_at_unix: now,
+            exit_code: None,
+            signal: None,
+        })
+    }
+
     pub fn running(
         id: &str,
         bundle: &Path,
@@ -57,9 +82,21 @@ impl ContainerState {
         })
     }
 
+    pub fn mark_running(&mut self, pid: i32, cgroup_path: Option<String>) -> Result<()> {
+        self.pid = Some(pid);
+        self.status = ContainerStatus::Running;
+        self.cgroup_path = cgroup_path;
+        self.updated_at_unix = unix_timestamp()?;
+        self.exit_code = None;
+        self.signal = None;
+        Ok(())
+    }
+
     pub fn mark_stopped(&mut self, exit_code: Option<i32>, signal: Option<String>) -> Result<()> {
+        self.pid = None;
         self.status = ContainerStatus::Stopped;
         self.updated_at_unix = unix_timestamp()?;
+        self.cgroup_path = None;
         self.exit_code = exit_code;
         self.signal = signal;
         Ok(())
@@ -197,5 +234,26 @@ mod tests {
         save_to(&root, &state).expect("stopped state should save");
         delete_from(&root, "demo").expect("stopped state should delete");
         assert!(!container_dir(&root, "demo").exists());
+    }
+
+    #[test]
+    fn saves_loads_and_deletes_created_state() {
+        let root =
+            std::env::temp_dir().join(format!("crun-rs-created-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let state =
+            ContainerState::created("demo-created", Path::new("/tmp/bundle"), "none", "default")
+                .expect("created state should be valid");
+        save_to(&root, &state).expect("created state should save");
+
+        let loaded = load_from(&root, "demo-created").expect("created state should load");
+        assert_eq!(loaded.status, ContainerStatus::Created);
+        assert_eq!(loaded.pid, None);
+        assert_eq!(loaded.network_mode, "none");
+        assert_eq!(loaded.security_profile, "default");
+
+        delete_from(&root, "demo-created").expect("created state should delete");
+        assert!(!container_dir(&root, "demo-created").exists());
     }
 }

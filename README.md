@@ -39,6 +39,14 @@ cargo clippy --all-targets --all-features
 sudo target/release/crun run --net bridge --security default demo examples/bundle
 ```
 
+Lifecycle form:
+
+```bash
+sudo target/release/crun create --net bridge --security default demo examples/bundle
+sudo target/release/crun state demo --json
+sudo target/release/crun start demo
+```
+
 Useful commands from another terminal:
 
 ```bash

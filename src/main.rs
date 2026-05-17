@@ -29,6 +29,17 @@ enum Command {
         id: String,
         bundle: PathBuf,
     },
+    Create {
+        #[arg(long, value_enum, default_value_t = CliNetworkMode::Bridge)]
+        net: CliNetworkMode,
+        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Default)]
+        security: CliSecurityProfile,
+        id: String,
+        bundle: PathBuf,
+    },
+    Start {
+        id: String,
+    },
     State {
         id: String,
         #[arg(long)]
@@ -76,6 +87,14 @@ impl From<CliSecurityProfile> for SecurityProfile {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RunOptions {
+    id: String,
+    bundle: PathBuf,
+    network_mode: NetworkMode,
+    security_profile: SecurityProfile,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -85,7 +104,24 @@ fn main() -> Result<()> {
             security,
             id,
             bundle,
-        } => run_container(id, bundle, net.into(), security.into())?,
+        } => run_container(RunOptions {
+            id,
+            bundle,
+            network_mode: net.into(),
+            security_profile: security.into(),
+        })?,
+        Command::Create {
+            net,
+            security,
+            id,
+            bundle,
+        } => create_container(RunOptions {
+            id,
+            bundle,
+            network_mode: net.into(),
+            security_profile: security.into(),
+        })?,
+        Command::Start { id } => start_container(&id)?,
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
         Command::Delete { id } => delete_container(&id)?,
@@ -94,15 +130,57 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_container(
-    id: String,
-    bundle: PathBuf,
-    network_mode: NetworkMode,
-    security_profile: SecurityProfile,
-) -> Result<()> {
-    if state::exists(&id)? {
-        bail!("container id already exists: {id}");
+fn run_container(options: RunOptions) -> Result<()> {
+    if state::exists(&options.id)? {
+        bail!("container id already exists: {}", options.id);
     }
+
+    execute_container(options, None)
+}
+
+fn create_container(options: RunOptions) -> Result<()> {
+    if state::exists(&options.id)? {
+        bail!("container id already exists: {}", options.id);
+    }
+
+    load_config(options.bundle.join("config.json"))?;
+
+    let state = ContainerState::created(
+        &options.id,
+        &options.bundle,
+        options.network_mode.as_str(),
+        options.security_profile.as_str(),
+    )?;
+    state::save(&state)?;
+    println!("created container: {}", options.id);
+
+    Ok(())
+}
+
+fn start_container(id: &str) -> Result<()> {
+    let state = state::load(id)?;
+    if state.status != ContainerStatus::Created {
+        bail!("container {id} is not created");
+    }
+
+    let options = RunOptions {
+        id: state.id.clone(),
+        bundle: PathBuf::from(&state.bundle),
+        network_mode: parse_network_mode(&state.network_mode)?,
+        security_profile: parse_security_profile(&state.security_profile)?,
+    };
+
+    execute_container(options, Some(state))
+}
+
+fn execute_container(
+    options: RunOptions,
+    mut existing_state: Option<ContainerState>,
+) -> Result<()> {
+    let id = options.id;
+    let bundle = options.bundle;
+    let network_mode = options.network_mode;
+    let security_profile = options.security_profile;
 
     let config_path = bundle.join("config.json");
     let config = load_config(config_path)?;
@@ -146,14 +224,19 @@ fn run_container(
             .cgroup_path
             .as_ref()
             .map(|path| path.display().to_string());
-        let state = ContainerState::running(
-            &id,
-            &bundle,
-            started.pid,
-            cgroup_path,
-            network_mode.as_str(),
-            security_profile.as_str(),
-        )?;
+        let state = if let Some(mut state) = existing_state.take() {
+            state.mark_running(started.pid, cgroup_path)?;
+            state
+        } else {
+            ContainerState::running(
+                &id,
+                &bundle,
+                started.pid,
+                cgroup_path,
+                network_mode.as_str(),
+                security_profile.as_str(),
+            )?
+        };
         state::save(&state)?;
         running_state = Some(state);
         Ok(())
@@ -181,6 +264,23 @@ fn run_container(
     }
 
     Ok(())
+}
+
+fn parse_network_mode(value: &str) -> Result<NetworkMode> {
+    match value {
+        "host" => Ok(NetworkMode::Host),
+        "none" => Ok(NetworkMode::None),
+        "bridge" => Ok(NetworkMode::Bridge),
+        _ => bail!("invalid network mode in state: {value}"),
+    }
+}
+
+fn parse_security_profile(value: &str) -> Result<SecurityProfile> {
+    match value {
+        "default" => Ok(SecurityProfile::Default),
+        "unconfined" => Ok(SecurityProfile::Unconfined),
+        _ => bail!("invalid security profile in state: {value}"),
+    }
 }
 
 fn show_state(id: &str, json: bool) -> Result<()> {
