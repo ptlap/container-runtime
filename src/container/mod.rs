@@ -10,40 +10,52 @@ use std::ffi::CString;
 use std::os::fd::OwnedFd;
 use std::path::Path;
 
+#[derive(Debug, Clone)]
+pub struct ProcessExit {
+    pub pid: i32,
+    pub code: Option<i32>,
+    pub signal: Option<String>,
+}
+
+pub struct ProcessConfig<'a> {
+    pub args: &'a [String],
+    pub env: &'a [String],
+    pub cwd: Option<&'a str>,
+    pub rootfs: &'a Path,
+    pub readonly_rootfs: bool,
+    pub flags: CloneFlags,
+    pub cgroup_config: Option<CgroupConfig>,
+}
+
 pub fn run_process(
-    args: &[String],
-    env: &[String],
-    cwd: Option<&str>,
-    rootfs: &Path,
-    readonly_rootfs: bool,
-    flags: CloneFlags,
-    cgroup_config: Option<CgroupConfig>,
-) -> Result<()> {
-    if args.is_empty() {
+    config: ProcessConfig<'_>,
+    on_started: &mut dyn FnMut(i32) -> Result<()>,
+) -> Result<ProcessExit> {
+    if config.args.is_empty() {
         bail!("process args is empty");
     }
 
     let (read_fd, write_fd) = pipe().context("failed to create sync pipe")?;
 
-    let parent_flags = flags & CloneFlags::CLONE_NEWPID;
+    let parent_flags = config.flags & CloneFlags::CLONE_NEWPID;
 
-    let mut child_flags = flags;
+    let mut child_flags = config.flags;
     child_flags.remove(CloneFlags::CLONE_NEWPID);
 
     if !parent_flags.is_empty() {
         unshare(parent_flags).context("failed to unshare parent namespaces")?;
     }
 
-    match unsafe { fork() }.context("failed to fork process")? {
+    let process_exit = match unsafe { fork() }.context("failed to fork process")? {
         ForkResult::Child => {
             close(write_fd).ok();
 
             if let Err(error) = run_child(
-                args,
-                env,
-                cwd,
-                rootfs,
-                readonly_rootfs,
+                config.args,
+                config.env,
+                config.cwd,
+                config.rootfs,
+                config.readonly_rootfs,
                 read_fd,
                 child_flags,
             ) {
@@ -56,9 +68,10 @@ pub fn run_process(
 
         ForkResult::Parent { child } => {
             close(read_fd).ok();
+            let child_pid = child.as_raw();
 
-            let cgroup = if let Some(config) = cgroup_config {
-                let cgroup = Cgroup::new(&format!("crun-{}", child.as_raw()), &config)?;
+            let cgroup = if let Some(cgroup_config) = config.cgroup_config {
+                let cgroup = Cgroup::new(&format!("crun-{child_pid}"), &cgroup_config)?;
                 cgroup.add_process(child)?;
                 Some(cgroup)
             } else {
@@ -69,6 +82,8 @@ pub fn run_process(
                 setup_veth_parent(child)?;
                 setup_nat()?;
             }
+
+            on_started(child_pid)?;
 
             write(&write_fd, &[1u8]).context("failed to signal child")?;
             close(write_fd).ok();
@@ -94,10 +109,28 @@ pub fn run_process(
             if let Some(cgroup) = cgroup {
                 cgroup.delete()?;
             }
-        }
-    }
 
-    Ok(())
+            match status {
+                WaitStatus::Exited(_, code) => ProcessExit {
+                    pid: child_pid,
+                    code: Some(code),
+                    signal: None,
+                },
+                WaitStatus::Signaled(_, signal, _) => ProcessExit {
+                    pid: child_pid,
+                    code: None,
+                    signal: Some(format!("{signal:?}")),
+                },
+                other => ProcessExit {
+                    pid: child_pid,
+                    code: None,
+                    signal: Some(format!("{other:?}")),
+                },
+            }
+        }
+    };
+
+    Ok(process_exit)
 }
 
 fn run_child(
