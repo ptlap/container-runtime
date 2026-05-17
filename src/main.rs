@@ -11,6 +11,10 @@ use container_runtime::state::{self, ContainerState, ContainerStatus};
 use nix::sched::CloneFlags;
 use std::path::Path;
 use std::path::PathBuf;
+use std::thread;
+use std::time::{Duration, Instant};
+
+const DEFAULT_STOP_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Debug, Parser)]
 #[command(name = "crun")]
@@ -55,6 +59,11 @@ enum Command {
         id: String,
         #[arg(long, default_value = DEFAULT_SIGNAL)]
         signal: String,
+    },
+    Stop {
+        id: String,
+        #[arg(long, default_value_t = DEFAULT_STOP_TIMEOUT_SECS)]
+        timeout: u64,
     },
     Delete {
         id: String,
@@ -131,6 +140,7 @@ fn main() -> Result<()> {
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
         Command::Kill { id, signal } => kill_container(&id, &signal)?,
+        Command::Stop { id, timeout } => stop_container(&id, timeout)?,
         Command::Delete { id } => delete_container(&id)?,
     }
 
@@ -395,6 +405,41 @@ fn kill_container(id: &str, signal: &str) -> Result<()> {
     println!("sent signal {signal} to container {id} pid {pid}");
 
     Ok(())
+}
+
+fn stop_container(id: &str, timeout_secs: u64) -> Result<()> {
+    kill_container(id, "SIGTERM")?;
+
+    if wait_for_stopped(id, Duration::from_secs(timeout_secs))? {
+        println!("container stopped: {id}");
+        return Ok(());
+    }
+
+    println!("container {id} did not stop after {timeout_secs}s; sending SIGKILL");
+    kill_container(id, "SIGKILL")?;
+
+    if wait_for_stopped(id, Duration::from_secs(5))? {
+        println!("container killed: {id}");
+        return Ok(());
+    }
+
+    bail!("container {id} did not stop after SIGKILL");
+}
+
+fn wait_for_stopped(id: &str, timeout: Duration) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if state::load(id)?.status == ContainerStatus::Stopped {
+            return Ok(true);
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn delete_container(id: &str) -> Result<()> {
