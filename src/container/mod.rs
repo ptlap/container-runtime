@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::wait::{waitpid, WaitStatus};
-use nix::unistd::{close, execvp, fork, pipe, read, write, ForkResult};
+use nix::unistd::{chdir, close, execvp, fork, pipe, read, write, ForkResult};
 use std::ffi::CString;
 use std::os::fd::OwnedFd;
 use std::path::Path;
@@ -13,6 +13,7 @@ use std::path::Path;
 pub fn run_process(
     args: &[String],
     env: &[String],
+    cwd: Option<&str>,
     rootfs: &Path,
     flags: CloneFlags,
     cgroup_config: Option<CgroupConfig>,
@@ -36,7 +37,7 @@ pub fn run_process(
         ForkResult::Child => {
             close(write_fd).ok();
 
-            if let Err(error) = run_child(args, env, rootfs, read_fd, child_flags) {
+            if let Err(error) = run_child(args, env, cwd, rootfs, read_fd, child_flags) {
                 eprintln!("container error: {error}");
                 std::process::exit(1);
             }
@@ -93,6 +94,7 @@ pub fn run_process(
 fn run_child(
     args: &[String],
     env: &[String],
+    cwd: Option<&str>,
     rootfs: &Path,
     read_fd: OwnedFd,
     child_flags: CloneFlags,
@@ -120,6 +122,10 @@ fn run_child(
         .context("failed to make mounts private")?;
 
     setup_rootfs(rootfs)?;
+
+    if let Some(cwd) = cwd {
+        chdir(cwd).with_context(|| format!("failed to chdir to process cwd: {cwd}"))?;
+    }
 
     for item in env {
         if let Some((key, value)) = item.split_once('=') {

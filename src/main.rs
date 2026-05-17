@@ -67,6 +67,7 @@ fn run_container(bundle: PathBuf) -> Result<()> {
     run_process(
         &config.process.args,
         &config.process.env,
+        config.process.cwd.as_deref(),
         &rootfs,
         flags,
         cgroup_config,

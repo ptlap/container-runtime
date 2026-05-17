@@ -17,3 +17,32 @@ pub fn namespace_flags(namespaces: &[String]) -> CloneFlags {
 
     flags
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn maps_supported_namespaces_to_clone_flags() {
+        let flags = namespace_flags(&names(&["pid", "mount", "uts", "ipc", "network", "user"]));
+
+        assert!(flags.contains(CloneFlags::CLONE_NEWPID));
+        assert!(flags.contains(CloneFlags::CLONE_NEWNS));
+        assert!(flags.contains(CloneFlags::CLONE_NEWUTS));
+        assert!(flags.contains(CloneFlags::CLONE_NEWIPC));
+        assert!(flags.contains(CloneFlags::CLONE_NEWNET));
+        assert!(flags.contains(CloneFlags::CLONE_NEWUSER));
+    }
+
+    #[test]
+    fn ignores_unknown_namespaces() {
+        let flags = namespace_flags(&names(&["pid", "unsupported"]));
+
+        assert!(flags.contains(CloneFlags::CLONE_NEWPID));
+        assert!(!flags.contains(CloneFlags::CLONE_NEWNS));
+    }
+}
