@@ -1,6 +1,9 @@
 use crate::cgroup::{Cgroup, CgroupConfig};
 use crate::filesystem::setup_rootfs;
-use crate::network::{cleanup_nat, setup_loopback, setup_nat, setup_veth_child, setup_veth_parent};
+use crate::network::{
+    cleanup_nat, cleanup_veth_host, setup_loopback, setup_nat, setup_veth_child, setup_veth_parent,
+    VethPair,
+};
 use anyhow::{bail, Context, Result};
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
@@ -84,23 +87,34 @@ pub fn run_process(
                 None
             };
 
-            if child_flags.contains(CloneFlags::CLONE_NEWNET) {
-                setup_veth_parent(child)?;
+            let veth = if child_flags.contains(CloneFlags::CLONE_NEWNET) {
+                let veth = VethPair::for_pid(child_pid);
+                setup_veth_parent(child, &veth)?;
                 setup_nat()?;
-            }
+                Some(veth)
+            } else {
+                None
+            };
 
             on_started(StartedProcess {
                 pid: child_pid,
                 cgroup_path: cgroup.as_ref().map(|cgroup| cgroup.path().to_path_buf()),
             })?;
 
-            write(&write_fd, &[1u8]).context("failed to signal child")?;
+            let peer_name = veth
+                .as_ref()
+                .map(|veth| veth.peer_name.as_str())
+                .unwrap_or("");
+            write(&write_fd, peer_name.as_bytes()).context("failed to signal child")?;
             close(write_fd).ok();
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
 
             if child_flags.contains(CloneFlags::CLONE_NEWNET) {
                 cleanup_nat()?;
+                if let Some(veth) = &veth {
+                    cleanup_veth_host(&veth.host_name).ok();
+                }
             }
 
             match status {
@@ -154,13 +168,11 @@ fn run_child(
     if !child_flags.is_empty() {
         unshare(child_flags).context("failed to unshare child namespaces")?;
     }
-    let mut buf = [0u8; 1];
-    read(&read_fd, &mut buf).context("failed to wait for parent signal")?;
-    close(read_fd).ok();
+    let peer_name = read_parent_signal(read_fd).context("failed to wait for parent signal")?;
 
     if child_flags.contains(CloneFlags::CLONE_NEWNET) {
         setup_loopback()?;
-        setup_veth_child()?;
+        setup_veth_child(&peer_name)?;
     }
 
     let command = CString::new(args[0].as_str()).context("invalid command")?;
@@ -188,4 +200,21 @@ fn run_child(
     execvp(&command, &c_args).context("failed to exec process")?;
 
     unreachable!();
+}
+
+fn read_parent_signal(read_fd: OwnedFd) -> Result<String> {
+    let mut bytes = Vec::new();
+    let mut buf = [0u8; 64];
+
+    loop {
+        let count = read(&read_fd, &mut buf).context("failed to read parent signal")?;
+        if count == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buf[..count]);
+    }
+
+    close(read_fd).ok();
+
+    String::from_utf8(bytes).context("parent signal was not valid UTF-8")
 }

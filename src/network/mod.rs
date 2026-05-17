@@ -3,44 +3,66 @@ use nix::unistd::Pid;
 use std::fs;
 use std::process::{Command, Stdio};
 
+const CONTAINER_IFACE: &str = "eth0";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VethPair {
+    pub host_name: String,
+    pub peer_name: String,
+}
+
+impl VethPair {
+    pub fn for_pid(pid: i32) -> Self {
+        Self {
+            host_name: format!("vethh{pid}"),
+            peer_name: format!("vethp{pid}"),
+        }
+    }
+}
+
 pub fn setup_loopback() -> Result<()> {
     run_ip(&["link", "set", "lo", "up"])
 }
 
-pub fn setup_veth_parent(child_pid: Pid) -> Result<()> {
-    run_ip_quiet(&["link", "delete", "veth-host"]).ok();
+pub fn setup_veth_parent(child_pid: Pid, veth: &VethPair) -> Result<()> {
+    run_ip_quiet(&["link", "delete", &veth.host_name]).ok();
 
     run_ip(&[
         "link",
         "add",
-        "veth-host",
+        &veth.host_name,
         "type",
         "veth",
         "peer",
         "name",
-        "veth-cont",
+        &veth.peer_name,
     ])?;
 
     run_ip(&[
         "link",
         "set",
-        "veth-cont",
+        &veth.peer_name,
         "netns",
         &child_pid.as_raw().to_string(),
     ])?;
 
-    run_ip(&["addr", "add", "10.0.0.1/24", "dev", "veth-host"])?;
-    run_ip(&["link", "set", "veth-host", "up"])?;
+    run_ip(&["addr", "add", "10.0.0.1/24", "dev", &veth.host_name])?;
+    run_ip(&["link", "set", &veth.host_name, "up"])?;
 
     Ok(())
 }
 
-pub fn setup_veth_child() -> Result<()> {
-    run_ip(&["addr", "add", "10.0.0.2/24", "dev", "veth-cont"])?;
-    run_ip(&["link", "set", "veth-cont", "up"])?;
+pub fn setup_veth_child(peer_name: &str) -> Result<()> {
+    run_ip(&["link", "set", peer_name, "name", CONTAINER_IFACE])?;
+    run_ip(&["addr", "add", "10.0.0.2/24", "dev", CONTAINER_IFACE])?;
+    run_ip(&["link", "set", CONTAINER_IFACE, "up"])?;
     run_ip(&["route", "add", "default", "via", "10.0.0.1"])?;
 
     Ok(())
+}
+
+pub fn cleanup_veth_host(host_name: &str) -> Result<()> {
+    run_ip_quiet(&["link", "delete", host_name])
 }
 
 fn run_ip(args: &[&str]) -> Result<()> {
@@ -145,4 +167,19 @@ pub fn cleanup_nat() -> Result<()> {
     {}
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generates_short_veth_names_from_pid() {
+        let veth = VethPair::for_pid(12345);
+
+        assert_eq!(veth.host_name, "vethh12345");
+        assert_eq!(veth.peer_name, "vethp12345");
+        assert!(veth.host_name.len() <= 15);
+        assert!(veth.peer_name.len() <= 15);
+    }
 }
