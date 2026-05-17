@@ -284,15 +284,17 @@ fn execute_container(
     };
 
     let process_exit = run_process(process_config, &mut save_started_state)?;
+    let exit_code = process_exit.code;
+    let exit_signal = process_exit.signal.clone();
 
     if let Some(mut state) = running_state {
         state
-            .mark_stopped(process_exit.code, process_exit.signal)
+            .mark_stopped(exit_code, exit_signal.clone())
             .context("failed to update stopped state")?;
         state::save(&state)?;
     }
 
-    Ok(())
+    exit_with_process_status(exit_code, exit_signal.as_deref());
 }
 
 fn parse_network_mode(value: &str) -> Result<NetworkMode> {
@@ -447,13 +449,30 @@ fn exec_container(id: &str, args: &[String]) -> Result<()> {
         cgroup_path: state.cgroup_path.as_deref(),
     })?;
 
-    match (exit.code, exit.signal) {
+    let exit_code = exit.code;
+    let exit_signal = exit.signal.clone();
+
+    match (exit_code, exit_signal.as_deref()) {
         (Some(code), _) => println!("exec process exited with code: {code}"),
         (None, Some(signal)) => println!("exec process killed by signal: {signal}"),
         (None, None) => println!("exec process ended without exit status"),
     }
 
-    Ok(())
+    exit_with_process_status(exit_code, exit_signal.as_deref());
+}
+
+fn exit_with_process_status(code: Option<i32>, signal: Option<&str>) -> ! {
+    std::process::exit(process_exit_status(code, signal));
+}
+
+fn process_exit_status(code: Option<i32>, signal: Option<&str>) -> i32 {
+    match (code, signal) {
+        (Some(code), _) if (0..=255).contains(&code) => code,
+        (Some(code), _) if code < 0 => 1,
+        (Some(_), _) => 255,
+        (None, Some(_)) => 128,
+        (None, None) => 1,
+    }
 }
 
 fn kill_container(id: &str, signal: &str) -> Result<()> {
@@ -514,4 +533,27 @@ fn delete_container(id: &str) -> Result<()> {
     state::delete(id)?;
     println!("deleted container state: {id}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_process_exit_code_to_cli_status() {
+        assert_eq!(process_exit_status(Some(0), None), 0);
+        assert_eq!(process_exit_status(Some(42), None), 42);
+    }
+
+    #[test]
+    fn clamps_process_exit_code_to_shell_range() {
+        assert_eq!(process_exit_status(Some(300), None), 255);
+        assert_eq!(process_exit_status(Some(-1), None), 1);
+    }
+
+    #[test]
+    fn maps_signal_and_missing_status_to_nonzero_cli_status() {
+        assert_eq!(process_exit_status(None, Some("SIGKILL")), 128);
+        assert_eq!(process_exit_status(None, None), 1);
+    }
 }
