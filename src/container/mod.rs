@@ -51,6 +51,51 @@ struct ChildConfig<'a> {
     child_flags: CloneFlags,
 }
 
+struct ParentResources {
+    cgroup: Option<Cgroup>,
+    bridge_network: Option<BridgeNetwork>,
+}
+
+impl ParentResources {
+    fn new() -> Self {
+        Self {
+            cgroup: None,
+            bridge_network: None,
+        }
+    }
+
+    fn cleanup(&mut self) -> Result<()> {
+        if let Some(network) = self.bridge_network.take() {
+            cleanup_nat(&network.subnet)
+                .with_context(|| format!("failed to cleanup NAT for {}", network.subnet))?;
+            if let Err(error) = cleanup_veth_host(&network.veth.host_name) {
+                eprintln!(
+                    "warn: failed to cleanup veth {}: {error}",
+                    network.veth.host_name
+                );
+            }
+        }
+
+        if let Some(cgroup) = self.cgroup.take() {
+            cgroup.delete()?;
+        }
+
+        Ok(())
+    }
+
+    fn cleanup_with_warnings(&mut self) {
+        if let Err(error) = self.cleanup() {
+            eprintln!("warn: parent resource cleanup failed: {error}");
+        }
+    }
+}
+
+impl Drop for ParentResources {
+    fn drop(&mut self) {
+        self.cleanup_with_warnings();
+    }
+}
+
 pub fn run_process(
     config: ProcessConfig<'_>,
     on_started: &mut dyn FnMut(StartedProcess) -> Result<()>,
@@ -101,30 +146,39 @@ pub fn run_process(
             close(read_fd).ok();
             close(error_write_fd).ok();
             let child_pid = child.as_raw();
+            let mut resources = ParentResources::new();
 
-            let cgroup = if let Some(cgroup_config) = config.cgroup_config {
+            if let Some(cgroup_config) = config.cgroup_config {
                 let cgroup = Cgroup::new(&format!("crun-{child_pid}"), &cgroup_config)?;
-                cgroup.add_process(child)?;
-                Some(cgroup)
-            } else {
-                None
-            };
+                resources.cgroup = Some(cgroup);
+                resources
+                    .cgroup
+                    .as_ref()
+                    .expect("cgroup was just created")
+                    .add_process(child)?;
+            }
 
-            let bridge_network = if config.network_mode == NetworkMode::Bridge {
+            if config.network_mode == NetworkMode::Bridge {
                 let network = BridgeNetwork::for_pid(child_pid);
-                setup_veth_parent(child, &network)?;
+                resources.bridge_network = Some(network);
+                let network = resources
+                    .bridge_network
+                    .as_ref()
+                    .expect("bridge network was just created");
+                setup_veth_parent(child, network)?;
                 setup_nat(&network.subnet)?;
-                Some(network)
-            } else {
-                None
-            };
+            }
 
             on_started(StartedProcess {
                 pid: child_pid,
-                cgroup_path: cgroup.as_ref().map(|cgroup| cgroup.path().to_path_buf()),
+                cgroup_path: resources
+                    .cgroup
+                    .as_ref()
+                    .map(|cgroup| cgroup.path().to_path_buf()),
             })?;
 
-            let signal = bridge_network
+            let signal = resources
+                .bridge_network
                 .as_ref()
                 .map(serde_json::to_string)
                 .transpose()
@@ -135,13 +189,6 @@ pub fn run_process(
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
             let child_error = read_child_error(error_read_fd)?;
-
-            if config.network_mode == NetworkMode::Bridge {
-                if let Some(network) = &bridge_network {
-                    cleanup_nat(&network.subnet)?;
-                    cleanup_veth_host(&network.veth.host_name).ok();
-                }
-            }
 
             match status {
                 WaitStatus::Exited(_, code) => {
@@ -155,9 +202,7 @@ pub fn run_process(
                 }
             }
 
-            if let Some(cgroup) = cgroup {
-                cgroup.delete()?;
-            }
+            resources.cleanup()?;
 
             match status {
                 WaitStatus::Exited(_, code) => ProcessExit {

@@ -126,6 +126,10 @@ pub fn setup_veth_child(network: &BridgeNetwork) -> Result<()> {
 }
 
 pub fn cleanup_veth_host(host_name: &str) -> Result<()> {
+    if run_ip_quiet(&["link", "show", host_name]).is_err() {
+        return Ok(());
+    }
+
     run_ip_quiet(&["link", "delete", host_name])
 }
 
