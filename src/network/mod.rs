@@ -1,10 +1,18 @@
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const CONTAINER_IFACE: &str = "eth0";
+const DEFAULT_NETWORK_STATE_ROOT: &str = "/run/crun-rs/network";
+const BRIDGE_OCTET_START: u8 = 20;
+const BRIDGE_OCTET_END: u8 = 219;
+const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -42,13 +50,36 @@ pub struct BridgeNetwork {
 impl BridgeNetwork {
     pub fn for_pid(pid: i32) -> Self {
         let octet = bridge_octet(pid);
+        Self::for_octet(pid, octet)
+    }
 
+    fn for_octet(pid: i32, octet: u8) -> Self {
         Self {
             veth: VethPair::for_pid(pid),
             subnet: format!("10.88.{octet}.0/24"),
             host_cidr: format!("10.88.{octet}.1/24"),
             container_cidr: format!("10.88.{octet}.2/24"),
             gateway: format!("10.88.{octet}.1"),
+        }
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct BridgeAllocations {
+    containers: BTreeMap<String, u8>,
+}
+
+struct AllocationLock {
+    path: PathBuf,
+}
+
+impl Drop for AllocationLock {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir(&self.path) {
+            eprintln!(
+                "warn: failed to release network allocation lock {}: {error}",
+                self.path.display()
+            );
         }
     }
 }
@@ -64,6 +95,111 @@ impl VethPair {
 
 fn bridge_octet(pid: i32) -> u8 {
     ((pid.unsigned_abs() % 200) + 20) as u8
+}
+
+pub fn allocate_bridge_network(container_id: &str, pid: i32) -> Result<BridgeNetwork> {
+    allocate_bridge_network_from(Path::new(DEFAULT_NETWORK_STATE_ROOT), container_id, pid)
+}
+
+pub fn release_bridge_network(container_id: &str) -> Result<()> {
+    release_bridge_network_from(Path::new(DEFAULT_NETWORK_STATE_ROOT), container_id)
+}
+
+fn allocate_bridge_network_from(
+    root: &Path,
+    container_id: &str,
+    pid: i32,
+) -> Result<BridgeNetwork> {
+    let _lock = acquire_allocation_lock(root)?;
+    let mut allocations = read_allocations(root)?;
+
+    if let Some(octet) = allocations.containers.get(container_id).copied() {
+        return Ok(BridgeNetwork::for_octet(pid, octet));
+    }
+
+    let octet = next_free_bridge_octet(&allocations)?;
+    allocations
+        .containers
+        .insert(container_id.to_string(), octet);
+    save_allocations(root, &allocations)?;
+
+    Ok(BridgeNetwork::for_octet(pid, octet))
+}
+
+fn release_bridge_network_from(root: &Path, container_id: &str) -> Result<()> {
+    let _lock = acquire_allocation_lock(root)?;
+    let mut allocations = read_allocations(root)?;
+    allocations.containers.remove(container_id);
+    save_allocations(root, &allocations)
+}
+
+fn next_free_bridge_octet(allocations: &BridgeAllocations) -> Result<u8> {
+    for octet in BRIDGE_OCTET_START..=BRIDGE_OCTET_END {
+        if !allocations.containers.values().any(|value| *value == octet) {
+            return Ok(octet);
+        }
+    }
+
+    anyhow::bail!(
+        "no bridge subnets available in 10.88.{}.0/24..10.88.{}.0/24",
+        BRIDGE_OCTET_START,
+        BRIDGE_OCTET_END
+    );
+}
+
+fn read_allocations(root: &Path) -> Result<BridgeAllocations> {
+    let path = allocations_file(root);
+    match fs::read_to_string(&path) {
+        Ok(content) => {
+            serde_json::from_str(&content).context("failed to parse network allocations")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(BridgeAllocations::default())
+        }
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to read network allocations: {}", path.display())),
+    }
+}
+
+fn save_allocations(root: &Path, allocations: &BridgeAllocations) -> Result<()> {
+    fs::create_dir_all(root)
+        .with_context(|| format!("failed to create network state root: {}", root.display()))?;
+    let content = serde_json::to_string_pretty(allocations)
+        .context("failed to serialize network allocations")?;
+    fs::write(allocations_file(root), format!("{content}\n"))
+        .context("failed to write network allocations")
+}
+
+fn acquire_allocation_lock(root: &Path) -> Result<AllocationLock> {
+    fs::create_dir_all(root)
+        .with_context(|| format!("failed to create network state root: {}", root.display()))?;
+
+    let path = root.join("allocations.lock");
+    let deadline = Instant::now() + LOCK_TIMEOUT;
+
+    loop {
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(AllocationLock { path }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if Instant::now() >= deadline {
+                    anyhow::bail!("timed out waiting for network allocation lock");
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to acquire network allocation lock: {}",
+                        path.display()
+                    )
+                });
+            }
+        }
+    }
+}
+
+fn allocations_file(root: &Path) -> PathBuf {
+    root.join("allocations.json")
 }
 
 pub fn setup_loopback() -> Result<()> {
@@ -261,6 +397,26 @@ mod tests {
         assert_eq!(network.host_cidr, "10.88.165.1/24");
         assert_eq!(network.container_cidr, "10.88.165.2/24");
         assert_eq!(network.gateway, "10.88.165.1");
+    }
+
+    #[test]
+    fn allocates_bridge_subnets_without_reuse_until_release() {
+        let root = std::env::temp_dir().join(format!("crun-rs-net-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let first = allocate_bridge_network_from(&root, "first", 1001).expect("first allocation");
+        let second =
+            allocate_bridge_network_from(&root, "second", 1002).expect("second allocation");
+
+        assert_eq!(first.subnet, "10.88.20.0/24");
+        assert_eq!(second.subnet, "10.88.21.0/24");
+
+        release_bridge_network_from(&root, "first").expect("release first allocation");
+        let third = allocate_bridge_network_from(&root, "third", 1003).expect("third allocation");
+
+        assert_eq!(third.subnet, "10.88.20.0/24");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

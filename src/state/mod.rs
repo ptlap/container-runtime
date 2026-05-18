@@ -1,3 +1,4 @@
+use crate::network::release_bridge_network;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -26,6 +27,8 @@ pub struct ContainerState {
     pub cgroup_path: Option<String>,
     #[serde(default = "default_network_mode")]
     pub network_mode: String,
+    #[serde(default)]
+    pub network_subnet: Option<String>,
     #[serde(default = "default_security_profile")]
     pub security_profile: String,
     pub created_at_unix: u64,
@@ -52,6 +55,7 @@ impl ContainerState {
             bundle: bundle.display().to_string(),
             cgroup_path: None,
             network_mode: network_mode.to_string(),
+            network_subnet: None,
             security_profile: security_profile.to_string(),
             created_at_unix: now,
             updated_at_unix: now,
@@ -65,6 +69,7 @@ impl ContainerState {
         bundle: &Path,
         pid: i32,
         cgroup_path: Option<String>,
+        network_subnet: Option<String>,
         network_mode: &str,
         security_profile: &str,
     ) -> Result<Self> {
@@ -79,6 +84,7 @@ impl ContainerState {
             bundle: bundle.display().to_string(),
             cgroup_path,
             network_mode: network_mode.to_string(),
+            network_subnet,
             security_profile: security_profile.to_string(),
             created_at_unix: now,
             updated_at_unix: now,
@@ -87,10 +93,16 @@ impl ContainerState {
         })
     }
 
-    pub fn mark_running(&mut self, pid: i32, cgroup_path: Option<String>) -> Result<()> {
+    pub fn mark_running(
+        &mut self,
+        pid: i32,
+        cgroup_path: Option<String>,
+        network_subnet: Option<String>,
+    ) -> Result<()> {
         self.pid = Some(pid);
         self.status = ContainerStatus::Running;
         self.cgroup_path = cgroup_path;
+        self.network_subnet = network_subnet;
         self.updated_at_unix = unix_timestamp()?;
         self.exit_code = None;
         self.signal = None;
@@ -102,6 +114,7 @@ impl ContainerState {
         self.status = ContainerStatus::Stopped;
         self.updated_at_unix = unix_timestamp()?;
         self.cgroup_path = None;
+        self.network_subnet = None;
         self.exit_code = exit_code;
         self.signal = signal;
         Ok(())
@@ -193,6 +206,7 @@ fn refresh_liveness(root: &Path, state: &mut ContainerState) -> Result<()> {
     }
 
     let Some(pid) = state.pid else {
+        release_state_network_allocation(state);
         state.mark_stopped(None, Some("STALE".to_string()))?;
         save_to(root, state)?;
         return Ok(());
@@ -202,8 +216,22 @@ fn refresh_liveness(root: &Path, state: &mut ContainerState) -> Result<()> {
         return Ok(());
     }
 
+    release_state_network_allocation(state);
     state.mark_stopped(None, Some("STALE".to_string()))?;
     save_to(root, state)
+}
+
+fn release_state_network_allocation(state: &ContainerState) {
+    if state.network_mode != "bridge" {
+        return;
+    }
+
+    if let Err(error) = release_bridge_network(&state.id) {
+        eprintln!(
+            "warn: failed to release bridge subnet for stale container {}: {error}",
+            state.id
+        );
+    }
 }
 
 fn pid_is_alive(pid: i32) -> bool {
@@ -239,6 +267,8 @@ fn delete_from(root: &Path, id: &str) -> Result<()> {
     if state.status == ContainerStatus::Running {
         bail!("container {id} is running; stop it before delete");
     }
+
+    release_state_network_allocation(&state);
 
     let dir = container_dir(root, id);
     fs::remove_dir_all(&dir)
@@ -298,7 +328,8 @@ mod tests {
             Path::new("/tmp/bundle"),
             1234,
             Some("/sys/fs/cgroup/container-runtime/crun-1234".to_string()),
-            "bridge",
+            None,
+            "none",
             "default",
         )
         .expect("state should be valid");
@@ -313,7 +344,8 @@ mod tests {
             loaded.cgroup_path.as_deref(),
             Some("/sys/fs/cgroup/container-runtime/crun-1234")
         );
-        assert_eq!(loaded.network_mode, "bridge");
+        assert_eq!(loaded.network_mode, "none");
+        assert_eq!(loaded.network_subnet, None);
         assert_eq!(loaded.security_profile, "default");
 
         state.mark_stopped(Some(0), None).expect("mark stopped");
@@ -389,7 +421,8 @@ mod tests {
             Path::new("/tmp/bundle"),
             -1,
             Some("/sys/fs/cgroup/container-runtime/crun-stale".to_string()),
-            "bridge",
+            Some("10.88.20.0/24".to_string()),
+            "none",
             "default",
         )
         .expect("running state should be valid");
@@ -400,6 +433,7 @@ mod tests {
         assert_eq!(loaded.status, ContainerStatus::Stopped);
         assert_eq!(loaded.pid, None);
         assert_eq!(loaded.cgroup_path, None);
+        assert_eq!(loaded.network_subnet, None);
         assert_eq!(loaded.signal.as_deref(), Some("STALE"));
 
         let _ = fs::remove_dir_all(&root);

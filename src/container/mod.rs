@@ -1,8 +1,8 @@
 use crate::cgroup::{Cgroup, CgroupConfig};
 use crate::filesystem::setup_rootfs;
 use crate::network::{
-    cleanup_nat, cleanup_veth_host, setup_loopback, setup_nat, setup_veth_child, setup_veth_parent,
-    BridgeNetwork, NetworkMode,
+    allocate_bridge_network, cleanup_nat, cleanup_veth_host, release_bridge_network,
+    setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NetworkMode,
 };
 use crate::security::{self, SecurityProfile};
 use anyhow::{bail, Context, Result};
@@ -23,6 +23,7 @@ pub struct ProcessExit {
 }
 
 pub struct ProcessConfig<'a> {
+    pub id: &'a str,
     pub args: &'a [String],
     pub env: &'a [String],
     pub cwd: Option<&'a str>,
@@ -38,6 +39,7 @@ pub struct ProcessConfig<'a> {
 pub struct StartedProcess {
     pub pid: i32,
     pub cgroup_path: Option<PathBuf>,
+    pub network_subnet: Option<String>,
 }
 
 struct ChildConfig<'a> {
@@ -52,15 +54,19 @@ struct ChildConfig<'a> {
 }
 
 struct ParentResources {
+    container_id: String,
     cgroup: Option<Cgroup>,
     bridge_network: Option<BridgeNetwork>,
+    release_bridge_allocation: bool,
 }
 
 impl ParentResources {
-    fn new() -> Self {
+    fn new(container_id: &str) -> Self {
         Self {
+            container_id: container_id.to_string(),
             cgroup: None,
             bridge_network: None,
+            release_bridge_allocation: false,
         }
     }
 
@@ -74,6 +80,13 @@ impl ParentResources {
                     network.veth.host_name
                 );
             }
+        }
+
+        if self.release_bridge_allocation {
+            release_bridge_network(&self.container_id).with_context(|| {
+                format!("failed to release bridge subnet for {}", self.container_id)
+            })?;
+            self.release_bridge_allocation = false;
         }
 
         if let Some(cgroup) = self.cgroup.take() {
@@ -146,7 +159,7 @@ pub fn run_process(
             close(read_fd).ok();
             close(error_write_fd).ok();
             let child_pid = child.as_raw();
-            let mut resources = ParentResources::new();
+            let mut resources = ParentResources::new(config.id);
 
             if let Some(cgroup_config) = config.cgroup_config {
                 let cgroup = Cgroup::new(&format!("crun-{child_pid}"), &cgroup_config)?;
@@ -159,8 +172,9 @@ pub fn run_process(
             }
 
             if config.network_mode == NetworkMode::Bridge {
-                let network = BridgeNetwork::for_pid(child_pid);
+                let network = allocate_bridge_network(config.id, child_pid)?;
                 resources.bridge_network = Some(network);
+                resources.release_bridge_allocation = true;
                 let network = resources
                     .bridge_network
                     .as_ref()
@@ -175,6 +189,10 @@ pub fn run_process(
                     .cgroup
                     .as_ref()
                     .map(|cgroup| cgroup.path().to_path_buf()),
+                network_subnet: resources
+                    .bridge_network
+                    .as_ref()
+                    .map(|network| network.subnet.clone()),
             })?;
 
             let signal = resources

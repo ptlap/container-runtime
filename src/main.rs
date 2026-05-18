@@ -253,8 +253,9 @@ fn execute_container(
             .cgroup_path
             .as_ref()
             .map(|path| path.display().to_string());
+        let network_subnet = started.network_subnet.clone();
         let state = if let Some(mut state) = existing_state.take() {
-            state.mark_running(started.pid, cgroup_path)?;
+            state.mark_running(started.pid, cgroup_path, network_subnet)?;
             state
         } else {
             ContainerState::running(
@@ -262,6 +263,7 @@ fn execute_container(
                 &bundle,
                 started.pid,
                 cgroup_path,
+                network_subnet,
                 network_mode.as_str(),
                 security_profile.as_str(),
             )?
@@ -272,6 +274,7 @@ fn execute_container(
     };
 
     let process_config = ProcessConfig {
+        id: &id,
         args: &config.process.args,
         env: &config.process.env,
         cwd: config.process.cwd.as_deref(),
@@ -337,6 +340,9 @@ fn show_state(id: &str, json: bool) -> Result<()> {
             state.cgroup_path.as_deref().unwrap_or("-")
         );
         println!("network_mode: {}", state.network_mode);
+        if let Some(subnet) = state.network_subnet {
+            println!("network_subnet: {subnet}");
+        }
         println!("security_profile: {}", state.security_profile);
         println!("created_at_unix: {}", state.created_at_unix);
         println!("updated_at_unix: {}", state.updated_at_unix);
