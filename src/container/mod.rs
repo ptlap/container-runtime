@@ -6,6 +6,7 @@ use crate::network::{
 };
 use crate::security::{self, SecurityProfile};
 use crate::spec::config::Mount;
+use crate::userns::{write_uid_gid_maps, UserNamespaceMode};
 use anyhow::{bail, Context, Result};
 use nix::libc;
 use nix::mount::{mount, MsFlags};
@@ -40,6 +41,7 @@ pub struct ProcessConfig<'a> {
     pub cgroup_config: Option<CgroupConfig>,
     pub network_mode: NetworkMode,
     pub security_profile: SecurityProfile,
+    pub userns_mode: UserNamespaceMode,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +61,7 @@ struct ChildConfig<'a> {
     mounts: &'a [Mount],
     network_mode: NetworkMode,
     security_profile: SecurityProfile,
+    userns_mode: UserNamespaceMode,
     child_flags: CloneFlags,
 }
 
@@ -128,17 +131,31 @@ pub fn run_process(
 
     let (read_fd, write_fd) = pipe().context("failed to create sync pipe")?;
     let (error_read_fd, error_write_fd) = pipe().context("failed to create child error pipe")?;
+    let (userns_ready_read_fd, userns_ready_write_fd) =
+        pipe().context("failed to create user namespace ready pipe")?;
+    let (userns_mapped_read_fd, userns_mapped_write_fd) =
+        pipe().context("failed to create user namespace mapped pipe")?;
     let log_pipe = create_log_pipe(config.log_path)?;
     let (mut log_write_fd, log_helper) = start_log_helper(
         log_pipe,
         config.log_path,
-        &[&read_fd, &write_fd, &error_read_fd, &error_write_fd],
+        &[
+            &read_fd,
+            &write_fd,
+            &error_read_fd,
+            &error_write_fd,
+            &userns_ready_read_fd,
+            &userns_ready_write_fd,
+            &userns_mapped_read_fd,
+            &userns_mapped_write_fd,
+        ],
     )?;
 
     let parent_flags = config.flags & CloneFlags::CLONE_NEWPID;
 
     let mut child_flags = config.flags;
     child_flags.remove(CloneFlags::CLONE_NEWPID);
+    child_flags.remove(CloneFlags::CLONE_NEWUSER);
 
     if !parent_flags.is_empty() {
         unshare(parent_flags).context("failed to unshare parent namespaces")?;
@@ -148,6 +165,8 @@ pub fn run_process(
         ForkResult::Child => {
             close(write_fd).ok();
             close(error_read_fd).ok();
+            close(userns_ready_read_fd).ok();
+            close(userns_mapped_write_fd).ok();
             if let Some(log_write_fd) = log_write_fd.take() {
                 redirect_stdio_to_log(&log_write_fd)?;
                 close(log_write_fd).ok();
@@ -163,10 +182,16 @@ pub fn run_process(
                 mounts: config.mounts,
                 network_mode: config.network_mode,
                 security_profile: config.security_profile,
+                userns_mode: config.userns_mode,
                 child_flags,
             };
 
-            if let Err(error) = run_child(child_config, read_fd) {
+            if let Err(error) = run_child(
+                child_config,
+                read_fd,
+                userns_ready_write_fd,
+                userns_mapped_read_fd,
+            ) {
                 eprintln!("container error: {error}");
                 write_child_error(&error_write_fd, &error).ok();
                 close(error_write_fd).ok();
@@ -179,6 +204,8 @@ pub fn run_process(
         ForkResult::Parent { child } => {
             close(read_fd).ok();
             close(error_write_fd).ok();
+            close(userns_ready_write_fd).ok();
+            close(userns_mapped_read_fd).ok();
             if let Some(log_write_fd) = log_write_fd.take() {
                 close(log_write_fd).ok();
             }
@@ -228,6 +255,18 @@ pub fn run_process(
                 .unwrap_or_default();
             write(&write_fd, signal.as_bytes()).context("failed to signal child")?;
             close(write_fd).ok();
+
+            if config.userns_mode.is_private() {
+                wait_for_userns_ready(&userns_ready_read_fd)?;
+            }
+            close(userns_ready_read_fd).ok();
+
+            if let UserNamespaceMode::Private(map) = config.userns_mode {
+                write_uid_gid_maps(child, map)?;
+                write(&userns_mapped_write_fd, b"1")
+                    .context("failed to signal child that user namespace is mapped")?;
+            }
+            close(userns_mapped_write_fd).ok();
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
             let child_error = read_child_error(error_read_fd)?;
@@ -405,10 +444,16 @@ fn read_child_error(error_read_fd: OwnedFd) -> Result<Option<String>> {
     }
 }
 
-fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
+fn run_child(
+    config: ChildConfig<'_>,
+    read_fd: OwnedFd,
+    userns_ready_write_fd: OwnedFd,
+    userns_mapped_read_fd: OwnedFd,
+) -> Result<()> {
     if !config.child_flags.is_empty() {
         unshare(config.child_flags).context("failed to unshare child namespaces")?;
     }
+
     let signal = read_parent_signal(read_fd).context("failed to wait for parent signal")?;
 
     if config.child_flags.contains(CloneFlags::CLONE_NEWNET) {
@@ -441,6 +486,14 @@ fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
         chdir(cwd).with_context(|| format!("failed to chdir to process cwd: {cwd}"))?;
     }
 
+    if config.userns_mode.is_private() {
+        unshare(CloneFlags::CLONE_NEWUSER).context("failed to unshare user namespace")?;
+        notify_userns_ready(&userns_ready_write_fd)?;
+        wait_for_userns_mapped(&userns_mapped_read_fd)?;
+    }
+    close(userns_ready_write_fd).ok();
+    close(userns_mapped_read_fd).ok();
+
     security::apply(config.security_profile)?;
 
     for item in config.env {
@@ -452,6 +505,30 @@ fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
     execvp(&command, &c_args).context("failed to exec process")?;
 
     unreachable!();
+}
+
+fn notify_userns_ready(write_fd: &OwnedFd) -> Result<()> {
+    write_all(write_fd, b"1").context("failed to notify parent that user namespace is ready")
+}
+
+fn wait_for_userns_ready(read_fd: &OwnedFd) -> Result<()> {
+    let mut buf = [0u8; 1];
+    let count = read(read_fd, &mut buf).context("failed to wait for child user namespace")?;
+    if count == 0 {
+        bail!("child exited before user namespace was ready");
+    }
+
+    Ok(())
+}
+
+fn wait_for_userns_mapped(read_fd: &OwnedFd) -> Result<()> {
+    let mut buf = [0u8; 1];
+    let count = read(read_fd, &mut buf).context("failed to wait for user namespace mapping")?;
+    if count == 0 {
+        bail!("parent exited before user namespace was mapped");
+    }
+
+    Ok(())
 }
 
 fn set_container_hostname(hostname: &str) -> Result<()> {

@@ -8,7 +8,10 @@ use container_runtime::network::NetworkMode;
 use container_runtime::security::SecurityProfile;
 use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
 use container_runtime::spec::config::load_config;
-use container_runtime::state::{self, ContainerState, ContainerStatus, StartedResources};
+use container_runtime::state::{
+    self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources,
+};
+use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
 use nix::sched::CloneFlags;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -36,6 +39,8 @@ enum Command {
         security: CliSecurityProfile,
         #[arg(long, value_enum, default_value_t = CliLogMode::Auto)]
         log: CliLogMode,
+        #[arg(long, value_enum, default_value_t = CliUsernsMode::Host)]
+        userns: CliUsernsMode,
         id: String,
         bundle: PathBuf,
     },
@@ -46,6 +51,8 @@ enum Command {
         security: CliSecurityProfile,
         #[arg(long, value_enum, default_value_t = CliLogMode::Auto)]
         log: CliLogMode,
+        #[arg(long, value_enum, default_value_t = CliUsernsMode::Host)]
+        userns: CliUsernsMode,
         id: String,
         bundle: PathBuf,
     },
@@ -111,6 +118,12 @@ enum CliLogMode {
     Off,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliUsernsMode {
+    Host,
+    Private,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum LogMode {
     Auto,
@@ -164,6 +177,7 @@ struct RunOptions {
     network_mode: NetworkMode,
     security_profile: SecurityProfile,
     log_mode: LogMode,
+    userns_mode: UserNamespaceMode,
 }
 
 fn main() -> Result<()> {
@@ -174,6 +188,7 @@ fn main() -> Result<()> {
             net,
             security,
             log,
+            userns,
             id,
             bundle,
         } => run_container(RunOptions {
@@ -182,11 +197,13 @@ fn main() -> Result<()> {
             network_mode: net.into(),
             security_profile: security.into(),
             log_mode: log.into(),
+            userns_mode: userns_mode_from_cli(userns)?,
         })?,
         Command::Create {
             net,
             security,
             log,
+            userns,
             id,
             bundle,
         } => create_container(RunOptions {
@@ -195,6 +212,7 @@ fn main() -> Result<()> {
             network_mode: net.into(),
             security_profile: security.into(),
             log_mode: log.into(),
+            userns_mode: userns_mode_from_cli(userns)?,
         })?,
         Command::Start { id } => start_container(&id)?,
         Command::State { id, json } => show_state(&id, json)?,
@@ -228,9 +246,12 @@ fn create_container(options: RunOptions) -> Result<()> {
     let state = ContainerState::created(
         &options.id,
         &options.bundle,
-        options.network_mode.as_str(),
-        options.security_profile.as_str(),
-        options.log_mode.as_str(),
+        RuntimeMetadata {
+            network_mode: options.network_mode.as_str(),
+            security_profile: options.security_profile.as_str(),
+            log_mode: options.log_mode.as_str(),
+            userns_mode: options.userns_mode.as_str(),
+        },
     )?;
     state::save(&state)?;
     println!("created container: {}", options.id);
@@ -250,6 +271,7 @@ fn start_container(id: &str) -> Result<()> {
         network_mode: parse_network_mode(&state.network_mode)?,
         security_profile: parse_security_profile(&state.security_profile)?,
         log_mode: parse_log_mode(&state.log_mode)?,
+        userns_mode: parse_userns_mode(&state.userns_mode)?,
     };
 
     execute_container(options, Some(state))
@@ -264,6 +286,7 @@ fn execute_container(
     let network_mode = options.network_mode;
     let security_profile = options.security_profile;
     let log_mode = options.log_mode;
+    let userns_mode = options.userns_mode;
 
     let config_path = bundle.join("config.json");
     let config = load_config(config_path)?;
@@ -286,13 +309,17 @@ fn execute_container(
         })
         .unwrap_or_default();
 
-    let flags = apply_network_mode(namespace_flags(&namespaces), network_mode);
+    let flags = apply_userns_mode(
+        apply_network_mode(namespace_flags(&namespaces), network_mode),
+        userns_mode,
+    );
 
     println!("namespaces: {:?}", namespaces);
     println!("clone flags: {:?}", flags);
     println!("network mode: {}", network_mode.as_str());
     println!("security profile: {}", security_profile.as_str());
     println!("log mode: {}", log_mode.as_str());
+    println!("user namespace: {}", userns_mode.as_str());
 
     let cgroup_config = config.linux.as_ref().and_then(|linux| {
         linux.resources.as_ref().map(|resources| CgroupConfig {
@@ -327,9 +354,12 @@ fn execute_container(
                 &bundle,
                 started.pid,
                 resources,
-                network_mode.as_str(),
-                security_profile.as_str(),
-                log_mode.as_str(),
+                RuntimeMetadata {
+                    network_mode: network_mode.as_str(),
+                    security_profile: security_profile.as_str(),
+                    log_mode: log_mode.as_str(),
+                    userns_mode: userns_mode.as_str(),
+                },
             )?
         };
         state::save(&state)?;
@@ -351,6 +381,7 @@ fn execute_container(
         cgroup_config,
         network_mode,
         security_profile,
+        userns_mode,
     };
 
     let process_exit = run_process(process_config, &mut save_started_state)?;
@@ -398,6 +429,49 @@ fn parse_log_mode(value: &str) -> Result<LogMode> {
     }
 }
 
+fn parse_userns_mode(value: &str) -> Result<UserNamespaceMode> {
+    match value {
+        "host" => Ok(UserNamespaceMode::Host),
+        "private" => Ok(UserNamespaceMode::Private(invoking_user_map()?)),
+        _ => bail!("invalid user namespace mode in state: {value}"),
+    }
+}
+
+fn userns_mode_from_cli(value: CliUsernsMode) -> Result<UserNamespaceMode> {
+    match value {
+        CliUsernsMode::Host => Ok(UserNamespaceMode::Host),
+        CliUsernsMode::Private => Ok(UserNamespaceMode::Private(invoking_user_map()?)),
+    }
+}
+
+fn invoking_user_map() -> Result<UserNamespaceMap> {
+    let current_uid = nix::unistd::getuid().as_raw();
+    let current_gid = nix::unistd::getgid().as_raw();
+
+    if current_uid == 0 {
+        return Ok(UserNamespaceMap {
+            host_uid: 0,
+            host_gid: current_gid,
+        });
+    }
+
+    Ok(UserNamespaceMap {
+        host_uid: env_uid("SUDO_UID")?.unwrap_or(current_uid),
+        host_gid: env_uid("SUDO_GID")?.unwrap_or(current_gid),
+    })
+}
+
+fn env_uid(key: &str) -> Result<Option<u32>> {
+    let Some(value) = std::env::var_os(key) else {
+        return Ok(None);
+    };
+    let value = value.to_string_lossy();
+    let parsed = value
+        .parse::<u32>()
+        .with_context(|| format!("{key} is not a valid uid/gid: {value}"))?;
+    Ok(Some(parsed))
+}
+
 fn show_state(id: &str, json: bool) -> Result<()> {
     let state = state::load_current(id)?;
 
@@ -424,6 +498,7 @@ fn show_state(id: &str, json: bool) -> Result<()> {
         }
         println!("log_mode: {}", state.log_mode);
         println!("security_profile: {}", state.security_profile);
+        println!("userns_mode: {}", state.userns_mode);
         println!("created_at_unix: {}", state.created_at_unix);
         println!("updated_at_unix: {}", state.updated_at_unix);
         if let Some(code) = state.exit_code {
@@ -441,6 +516,15 @@ fn apply_network_mode(mut flags: CloneFlags, network_mode: NetworkMode) -> Clone
     match network_mode {
         NetworkMode::Host => flags.remove(CloneFlags::CLONE_NEWNET),
         NetworkMode::None | NetworkMode::Bridge => flags.insert(CloneFlags::CLONE_NEWNET),
+    }
+
+    flags
+}
+
+fn apply_userns_mode(mut flags: CloneFlags, userns_mode: UserNamespaceMode) -> CloneFlags {
+    match userns_mode {
+        UserNamespaceMode::Host => flags.remove(CloneFlags::CLONE_NEWUSER),
+        UserNamespaceMode::Private(_) => flags.insert(CloneFlags::CLONE_NEWUSER),
     }
 
     flags
@@ -502,17 +586,18 @@ fn list_containers(json: bool) -> Result<()> {
     }
 
     println!(
-        "{:<24} {:<10} {:<8} {:<8} {:<11} BUNDLE",
-        "ID", "STATUS", "PID", "NET", "SECURITY"
+        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} BUNDLE",
+        "ID", "STATUS", "PID", "NET", "SECURITY", "USERNS"
     );
     for state in states {
         println!(
-            "{:<24} {:<10} {:<8} {:<8} {:<11} {}",
+            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {}",
             state.id,
             format!("{:?}", state.status).to_lowercase(),
             state.pid.map_or("-".to_string(), |pid| pid.to_string()),
             state.network_mode,
             state.security_profile,
+            state.userns_mode,
             state.bundle
         );
     }

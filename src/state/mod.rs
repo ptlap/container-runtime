@@ -35,6 +35,8 @@ pub struct ContainerState {
     pub log_mode: String,
     #[serde(default = "default_security_profile")]
     pub security_profile: String,
+    #[serde(default = "default_userns_mode")]
+    pub userns_mode: String,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub exit_code: Option<i32>,
@@ -48,14 +50,16 @@ pub struct StartedResources {
     pub log_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeMetadata<'a> {
+    pub network_mode: &'a str,
+    pub security_profile: &'a str,
+    pub log_mode: &'a str,
+    pub userns_mode: &'a str,
+}
+
 impl ContainerState {
-    pub fn created(
-        id: &str,
-        bundle: &Path,
-        network_mode: &str,
-        security_profile: &str,
-        log_mode: &str,
-    ) -> Result<Self> {
+    pub fn created(id: &str, bundle: &Path, metadata: RuntimeMetadata<'_>) -> Result<Self> {
         validate_id(id)?;
         let now = unix_timestamp()?;
 
@@ -66,11 +70,12 @@ impl ContainerState {
             status: ContainerStatus::Created,
             bundle: bundle.display().to_string(),
             cgroup_path: None,
-            network_mode: network_mode.to_string(),
+            network_mode: metadata.network_mode.to_string(),
             network_subnet: None,
             log_path: Some(log_file(id).display().to_string()),
-            log_mode: log_mode.to_string(),
-            security_profile: security_profile.to_string(),
+            log_mode: metadata.log_mode.to_string(),
+            security_profile: metadata.security_profile.to_string(),
+            userns_mode: metadata.userns_mode.to_string(),
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -83,9 +88,7 @@ impl ContainerState {
         bundle: &Path,
         pid: i32,
         resources: StartedResources,
-        network_mode: &str,
-        security_profile: &str,
-        log_mode: &str,
+        metadata: RuntimeMetadata<'_>,
     ) -> Result<Self> {
         validate_id(id)?;
         let now = unix_timestamp()?;
@@ -97,11 +100,12 @@ impl ContainerState {
             status: ContainerStatus::Running,
             bundle: bundle.display().to_string(),
             cgroup_path: resources.cgroup_path,
-            network_mode: network_mode.to_string(),
+            network_mode: metadata.network_mode.to_string(),
             network_subnet: resources.network_subnet,
             log_path: resources.log_path,
-            log_mode: log_mode.to_string(),
-            security_profile: security_profile.to_string(),
+            log_mode: metadata.log_mode.to_string(),
+            security_profile: metadata.security_profile.to_string(),
+            userns_mode: metadata.userns_mode.to_string(),
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -155,6 +159,10 @@ fn default_log_mode() -> String {
 
 fn default_security_profile() -> String {
     "default".to_string()
+}
+
+fn default_userns_mode() -> String {
+    "host".to_string()
 }
 
 pub fn load(id: &str) -> Result<ContainerState> {
@@ -358,6 +366,12 @@ mod tests {
     fn saves_loads_and_deletes_stopped_state() {
         let root = std::env::temp_dir().join(format!("crun-rs-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
+        let metadata = RuntimeMetadata {
+            network_mode: "none",
+            security_profile: "default",
+            log_mode: "on",
+            userns_mode: "private",
+        };
 
         let mut state = ContainerState::running(
             "demo",
@@ -368,9 +382,7 @@ mod tests {
                 network_subnet: None,
                 log_path: Some("/run/crun-rs/demo/container.log".to_string()),
             },
-            "none",
-            "default",
-            "on",
+            metadata,
         )
         .expect("state should be valid");
         save_to(&root, &state).expect("state should save");
@@ -392,6 +404,7 @@ mod tests {
         );
         assert_eq!(loaded.log_mode, "on");
         assert_eq!(loaded.security_profile, "default");
+        assert_eq!(loaded.userns_mode, "private");
 
         state.mark_stopped(Some(0), None).expect("mark stopped");
         save_to(&root, &state).expect("stopped state should save");
@@ -408,9 +421,12 @@ mod tests {
         let state = ContainerState::created(
             "demo-created",
             Path::new("/tmp/bundle"),
-            "none",
-            "default",
-            "auto",
+            RuntimeMetadata {
+                network_mode: "none",
+                security_profile: "default",
+                log_mode: "auto",
+                userns_mode: "host",
+            },
         )
         .expect("created state should be valid");
         save_to(&root, &state).expect("created state should save");
@@ -426,6 +442,7 @@ mod tests {
         );
         assert_eq!(loaded.log_mode, "auto");
         assert_eq!(loaded.security_profile, "default");
+        assert_eq!(loaded.userns_mode, "host");
 
         delete_from(&root, "demo-created").expect("created state should delete");
         assert!(!container_dir(&root, "demo-created").exists());
@@ -436,12 +453,28 @@ mod tests {
         let root = std::env::temp_dir().join(format!("crun-rs-list-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
 
-        let beta =
-            ContainerState::created("beta", Path::new("/tmp/beta"), "bridge", "default", "auto")
-                .expect("beta state should be valid");
-        let alpha =
-            ContainerState::created("alpha", Path::new("/tmp/alpha"), "none", "default", "auto")
-                .expect("alpha state should be valid");
+        let beta = ContainerState::created(
+            "beta",
+            Path::new("/tmp/beta"),
+            RuntimeMetadata {
+                network_mode: "bridge",
+                security_profile: "default",
+                log_mode: "auto",
+                userns_mode: "host",
+            },
+        )
+        .expect("beta state should be valid");
+        let alpha = ContainerState::created(
+            "alpha",
+            Path::new("/tmp/alpha"),
+            RuntimeMetadata {
+                network_mode: "none",
+                security_profile: "default",
+                log_mode: "auto",
+                userns_mode: "host",
+            },
+        )
+        .expect("alpha state should be valid");
 
         save_to(&root, &beta).expect("beta state should save");
         save_to(&root, &alpha).expect("alpha state should save");
@@ -472,6 +505,12 @@ mod tests {
     fn load_current_marks_missing_running_pid_as_stale() {
         let root = std::env::temp_dir().join(format!("crun-rs-stale-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
+        let metadata = RuntimeMetadata {
+            network_mode: "none",
+            security_profile: "default",
+            log_mode: "auto",
+            userns_mode: "host",
+        };
 
         let state = ContainerState::running(
             "stale",
@@ -482,9 +521,7 @@ mod tests {
                 network_subnet: Some("10.88.20.0/24".to_string()),
                 log_path: Some("/run/crun-rs/stale/container.log".to_string()),
             },
-            "none",
-            "default",
-            "auto",
+            metadata,
         )
         .expect("running state should be valid");
         save_to(&root, &state).expect("state should save");
@@ -522,5 +559,6 @@ mod tests {
         assert_eq!(state.schema_version, STATE_SCHEMA_VERSION);
         assert_eq!(state.id, "legacy");
         assert_eq!(state.status, ContainerStatus::Created);
+        assert_eq!(state.userns_mode, "host");
     }
 }
