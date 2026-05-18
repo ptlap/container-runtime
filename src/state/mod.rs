@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_STATE_ROOT: &str = "/run/crun-rs";
+pub const STATE_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -16,6 +17,8 @@ pub enum ContainerStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContainerState {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     pub id: String,
     pub pid: Option<i32>,
     pub status: ContainerStatus,
@@ -42,6 +45,7 @@ impl ContainerState {
         let now = unix_timestamp()?;
 
         Ok(Self {
+            schema_version: STATE_SCHEMA_VERSION,
             id: id.to_string(),
             pid: None,
             status: ContainerStatus::Created,
@@ -68,6 +72,7 @@ impl ContainerState {
         let now = unix_timestamp()?;
 
         Ok(Self {
+            schema_version: STATE_SCHEMA_VERSION,
             id: id.to_string(),
             pid: Some(pid),
             status: ContainerStatus::Running,
@@ -101,6 +106,10 @@ impl ContainerState {
         self.signal = signal;
         Ok(())
     }
+}
+
+fn default_schema_version() -> u32 {
+    STATE_SCHEMA_VERSION
 }
 
 fn default_network_mode() -> String {
@@ -296,6 +305,7 @@ mod tests {
         save_to(&root, &state).expect("state should save");
 
         let loaded = load_from(&root, "demo").expect("state should load");
+        assert_eq!(loaded.schema_version, STATE_SCHEMA_VERSION);
         assert_eq!(loaded.id, "demo");
         assert_eq!(loaded.pid, Some(1234));
         assert_eq!(loaded.status, ContainerStatus::Running);
@@ -324,6 +334,7 @@ mod tests {
         save_to(&root, &state).expect("created state should save");
 
         let loaded = load_from(&root, "demo-created").expect("created state should load");
+        assert_eq!(loaded.schema_version, STATE_SCHEMA_VERSION);
         assert_eq!(loaded.status, ContainerStatus::Created);
         assert_eq!(loaded.pid, None);
         assert_eq!(loaded.network_mode, "none");
@@ -392,5 +403,29 @@ mod tests {
         assert_eq!(loaded.signal.as_deref(), Some("STALE"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn loads_legacy_state_without_schema_version() {
+        let content = r#"{
+  "id": "legacy",
+  "pid": null,
+  "status": "created",
+  "bundle": "/tmp/bundle",
+  "cgroup_path": null,
+  "network_mode": "none",
+  "security_profile": "default",
+  "created_at_unix": 1,
+  "updated_at_unix": 1,
+  "exit_code": null,
+  "signal": null
+}"#;
+
+        let state: ContainerState =
+            serde_json::from_str(content).expect("legacy state should deserialize");
+
+        assert_eq!(state.schema_version, STATE_SCHEMA_VERSION);
+        assert_eq!(state.id, "legacy");
+        assert_eq!(state.status, ContainerStatus::Created);
     }
 }
