@@ -6,13 +6,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CONTAINER_IFACE: &str = "eth0";
 const DEFAULT_NETWORK_STATE_ROOT: &str = "/run/crun-rs/network";
 const BRIDGE_OCTET_START: u8 = 20;
 const BRIDGE_OCTET_END: u8 = 219;
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const STALE_LOCK_AFTER_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -69,13 +70,19 @@ struct BridgeAllocations {
     containers: BTreeMap<String, u8>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct AllocationLockOwner {
+    owner_pid: u32,
+    created_at_unix: u64,
+}
+
 struct AllocationLock {
     path: PathBuf,
 }
 
 impl Drop for AllocationLock {
     fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir(&self.path) {
+        if let Err(error) = fs::remove_dir_all(&self.path) {
             eprintln!(
                 "warn: failed to release network allocation lock {}: {error}",
                 self.path.display()
@@ -179,8 +186,12 @@ fn acquire_allocation_lock(root: &Path) -> Result<AllocationLock> {
 
     loop {
         match fs::create_dir(&path) {
-            Ok(()) => return Ok(AllocationLock { path }),
+            Ok(()) => {
+                write_lock_owner(&path)?;
+                return Ok(AllocationLock { path });
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                remove_stale_allocation_lock(&path)?;
                 if Instant::now() >= deadline {
                     anyhow::bail!("timed out waiting for network allocation lock");
                 }
@@ -198,8 +209,84 @@ fn acquire_allocation_lock(root: &Path) -> Result<AllocationLock> {
     }
 }
 
+fn write_lock_owner(path: &Path) -> Result<()> {
+    let owner = AllocationLockOwner {
+        owner_pid: std::process::id(),
+        created_at_unix: unix_timestamp()?,
+    };
+    let content = serde_json::to_string_pretty(&owner).context("failed to serialize lock owner")?;
+    fs::write(lock_owner_file(path), format!("{content}\n")).with_context(|| {
+        format!(
+            "failed to write network allocation lock owner: {}",
+            path.display()
+        )
+    })
+}
+
+fn remove_stale_allocation_lock(path: &Path) -> Result<()> {
+    if !allocation_lock_is_stale(path)? {
+        return Ok(());
+    }
+
+    fs::remove_dir_all(path).with_context(|| {
+        format!(
+            "failed to remove stale network allocation lock: {}",
+            path.display()
+        )
+    })
+}
+
+fn allocation_lock_is_stale(path: &Path) -> Result<bool> {
+    let owner = read_lock_owner(path)?;
+
+    if !pid_exists(owner.owner_pid) {
+        return Ok(true);
+    }
+
+    let now = unix_timestamp()?;
+    Ok(now.saturating_sub(owner.created_at_unix) > STALE_LOCK_AFTER_SECS)
+}
+
+fn read_lock_owner(path: &Path) -> Result<AllocationLockOwner> {
+    let owner_path = lock_owner_file(path);
+    match fs::read_to_string(&owner_path) {
+        Ok(content) => {
+            serde_json::from_str(&content).context("failed to parse network allocation lock owner")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AllocationLockOwner {
+            owner_pid: 0,
+            created_at_unix: 0,
+        }),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to read network allocation lock owner: {}",
+                owner_path.display()
+            )
+        }),
+    }
+}
+
+fn pid_exists(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    Path::new("/proc").join(pid.to_string()).exists()
+}
+
+fn unix_timestamp() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?
+        .as_secs())
+}
+
 fn allocations_file(root: &Path) -> PathBuf {
     root.join("allocations.json")
+}
+
+fn lock_owner_file(lock_path: &Path) -> PathBuf {
+    lock_path.join("owner.json")
 }
 
 pub fn setup_loopback() -> Result<()> {
@@ -415,6 +502,30 @@ mod tests {
         let third = allocate_bridge_network_from(&root, "third", 1003).expect("third allocation");
 
         assert_eq!(third.subnet, "10.88.20.0/24");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removes_stale_allocation_lock_before_allocating() {
+        let root = std::env::temp_dir().join(format!(
+            "crun-rs-stale-net-lock-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let lock = root.join("allocations.lock");
+        fs::create_dir_all(&lock).expect("create stale lock");
+        let owner = AllocationLockOwner {
+            owner_pid: 0,
+            created_at_unix: 1,
+        };
+        let content = serde_json::to_string_pretty(&owner).expect("serialize owner");
+        fs::write(lock_owner_file(&lock), format!("{content}\n")).expect("write stale owner");
+
+        let network = allocate_bridge_network_from(&root, "after-stale", 1001).expect("allocation");
+
+        assert_eq!(network.subnet, "10.88.20.0/24");
+        assert!(!lock.exists());
 
         let _ = fs::remove_dir_all(&root);
     }
