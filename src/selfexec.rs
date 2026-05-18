@@ -5,13 +5,14 @@ use std::fs::File;
 use std::io::{self, Seek, SeekFrom};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
 
 const REEXEC_ENV: &str = "CRUN_RS_SELF_REEXEC";
 
 pub fn ensure_reexecuted_from_memfd() -> Result<()> {
     if std::env::var_os(REEXEC_ENV).is_some() {
         std::env::remove_var(REEXEC_ENV);
-        if running_from_memfd()? {
+        if is_running_from_memfd()? {
             return Ok(());
         }
     }
@@ -27,8 +28,12 @@ pub fn ensure_reexecuted_from_memfd() -> Result<()> {
     reexec_from_memfd(sealed_exe.as_raw_fd())
 }
 
-fn running_from_memfd() -> Result<bool> {
-    let exe = std::fs::read_link("/proc/self/exe").context("failed to read /proc/self/exe link")?;
+pub fn current_exe_link() -> Result<PathBuf> {
+    std::fs::read_link("/proc/self/exe").context("failed to read /proc/self/exe link")
+}
+
+pub fn is_running_from_memfd() -> Result<bool> {
+    let exe = current_exe_link()?;
     Ok(exe.as_os_str().as_bytes().starts_with(b"/memfd:"))
 }
 

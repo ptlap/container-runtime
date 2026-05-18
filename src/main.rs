@@ -6,7 +6,9 @@ use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::security::SecurityProfile;
-use container_runtime::selfexec::ensure_reexecuted_from_memfd;
+use container_runtime::selfexec::{
+    current_exe_link, ensure_reexecuted_from_memfd, is_running_from_memfd,
+};
 use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
 use container_runtime::spec::config::load_config;
 use container_runtime::state::{
@@ -97,6 +99,15 @@ enum Command {
     Delete {
         id: String,
     },
+    Debug {
+        #[command(subcommand)]
+        command: DebugCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DebugCommand {
+    SelfExec,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -226,8 +237,21 @@ fn main() -> Result<()> {
         Command::Kill { id, signal } => kill_container(&id, &signal)?,
         Command::Stop { id, timeout } => stop_container(&id, timeout)?,
         Command::Delete { id } => delete_container(&id)?,
+        Command::Debug { command } => debug_command(command)?,
     }
 
+    Ok(())
+}
+
+fn debug_command(command: DebugCommand) -> Result<()> {
+    match command {
+        DebugCommand::SelfExec => debug_self_exec(),
+    }
+}
+
+fn debug_self_exec() -> Result<()> {
+    println!("exe: {}", current_exe_link()?.display());
+    println!("running_from_memfd: {}", is_running_from_memfd()?);
     Ok(())
 }
 
