@@ -41,6 +41,13 @@ pub struct ContainerState {
     pub signal: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct StartedResources {
+    pub cgroup_path: Option<String>,
+    pub network_subnet: Option<String>,
+    pub log_path: Option<String>,
+}
+
 impl ContainerState {
     pub fn created(
         id: &str,
@@ -71,14 +78,11 @@ impl ContainerState {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn running(
         id: &str,
         bundle: &Path,
         pid: i32,
-        cgroup_path: Option<String>,
-        network_subnet: Option<String>,
-        log_path: Option<String>,
+        resources: StartedResources,
         network_mode: &str,
         security_profile: &str,
         log_mode: &str,
@@ -92,10 +96,10 @@ impl ContainerState {
             pid: Some(pid),
             status: ContainerStatus::Running,
             bundle: bundle.display().to_string(),
-            cgroup_path,
+            cgroup_path: resources.cgroup_path,
             network_mode: network_mode.to_string(),
-            network_subnet,
-            log_path,
+            network_subnet: resources.network_subnet,
+            log_path: resources.log_path,
             log_mode: log_mode.to_string(),
             security_profile: security_profile.to_string(),
             created_at_unix: now,
@@ -108,16 +112,14 @@ impl ContainerState {
     pub fn mark_running(
         &mut self,
         pid: i32,
-        cgroup_path: Option<String>,
-        network_subnet: Option<String>,
-        log_path: Option<String>,
+        resources: StartedResources,
         log_mode: &str,
     ) -> Result<()> {
         self.pid = Some(pid);
         self.status = ContainerStatus::Running;
-        self.cgroup_path = cgroup_path;
-        self.network_subnet = network_subnet;
-        self.log_path = log_path;
+        self.cgroup_path = resources.cgroup_path;
+        self.network_subnet = resources.network_subnet;
+        self.log_path = resources.log_path;
         self.log_mode = log_mode.to_string();
         self.updated_at_unix = unix_timestamp()?;
         self.exit_code = None;
@@ -125,6 +127,8 @@ impl ContainerState {
         Ok(())
     }
 
+    /// Mark the container as stopped. The `log_path` is intentionally preserved
+    /// so that `crun logs` can read container output after the container exits.
     pub fn mark_stopped(&mut self, exit_code: Option<i32>, signal: Option<String>) -> Result<()> {
         self.pid = None;
         self.status = ContainerStatus::Stopped;
@@ -359,9 +363,11 @@ mod tests {
             "demo",
             Path::new("/tmp/bundle"),
             1234,
-            Some("/sys/fs/cgroup/container-runtime/crun-1234".to_string()),
-            None,
-            Some("/run/crun-rs/demo/container.log".to_string()),
+            StartedResources {
+                cgroup_path: Some("/sys/fs/cgroup/container-runtime/crun-1234".to_string()),
+                network_subnet: None,
+                log_path: Some("/run/crun-rs/demo/container.log".to_string()),
+            },
             "none",
             "default",
             "on",
@@ -471,9 +477,11 @@ mod tests {
             "stale",
             Path::new("/tmp/bundle"),
             -1,
-            Some("/sys/fs/cgroup/container-runtime/crun-stale".to_string()),
-            Some("10.88.20.0/24".to_string()),
-            Some("/run/crun-rs/stale/container.log".to_string()),
+            StartedResources {
+                cgroup_path: Some("/sys/fs/cgroup/container-runtime/crun-stale".to_string()),
+                network_subnet: Some("10.88.20.0/24".to_string()),
+                log_path: Some("/run/crun-rs/stale/container.log".to_string()),
+            },
             "none",
             "default",
             "auto",

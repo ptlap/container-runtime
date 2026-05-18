@@ -8,7 +8,7 @@ use container_runtime::network::NetworkMode;
 use container_runtime::security::SecurityProfile;
 use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
 use container_runtime::spec::config::load_config;
-use container_runtime::state::{self, ContainerState, ContainerStatus};
+use container_runtime::state::{self, ContainerState, ContainerStatus, StartedResources};
 use nix::sched::CloneFlags;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -313,23 +313,20 @@ fn execute_container(
             .map(|path| path.display().to_string());
         let network_subnet = started.network_subnet.clone();
         let log_path = capture_logs.then(|| log_path.display().to_string());
+        let resources = StartedResources {
+            cgroup_path,
+            network_subnet,
+            log_path,
+        };
         let state = if let Some(mut state) = existing_state.take() {
-            state.mark_running(
-                started.pid,
-                cgroup_path,
-                network_subnet,
-                log_path,
-                log_mode.as_str(),
-            )?;
+            state.mark_running(started.pid, resources, log_mode.as_str())?;
             state
         } else {
             ContainerState::running(
                 &id,
                 &bundle,
                 started.pid,
-                cgroup_path,
-                network_subnet,
-                log_path,
+                resources,
                 network_mode.as_str(),
                 security_profile.as_str(),
                 log_mode.as_str(),
