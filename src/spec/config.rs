@@ -16,6 +16,9 @@ pub struct OciConfig {
 
     #[serde(default)]
     pub linux: Option<Linux>,
+
+    #[serde(default)]
+    pub crun: Option<CrunConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +38,25 @@ pub struct Root {
 
     #[serde(default)]
     pub readonly: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CrunConfig {
+    #[serde(default)]
+    pub overlay: Option<CrunOverlay>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CrunOverlay {
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default)]
+    pub lowerdir: Option<String>,
+
+    pub upperdir: String,
+    pub workdir: String,
+    pub mergeddir: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +143,20 @@ impl OciConfig {
             }
         }
 
+        if let Some(overlay) = self.crun.as_ref().and_then(|crun| crun.overlay.as_ref()) {
+            if overlay.enabled {
+                if overlay.upperdir.trim().is_empty() {
+                    bail!("crun.overlay.upperdir must not be empty");
+                }
+                if overlay.workdir.trim().is_empty() {
+                    bail!("crun.overlay.workdir must not be empty");
+                }
+                if overlay.mergeddir.trim().is_empty() {
+                    bail!("crun.overlay.mergeddir must not be empty");
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -167,7 +203,15 @@ mod tests {
                         "type": "bind",
                         "options": ["rbind", "ro"]
                     }
-                ]
+                ],
+                "crun": {
+                    "overlay": {
+                        "enabled": true,
+                        "upperdir": "../overlay/demo/upper",
+                        "workdir": "../overlay/demo/work",
+                        "mergeddir": "../overlay/demo/merged"
+                    }
+                }
             }"#,
         )
         .expect("valid config");
@@ -182,6 +226,15 @@ mod tests {
         assert_eq!(config.mounts[0].destination, "/data");
         assert_eq!(config.mounts[0].source.as_deref(), Some("/tmp/data"));
         assert_eq!(config.mounts[0].mount_type, "bind");
+        let overlay = config
+            .crun
+            .as_ref()
+            .and_then(|crun| crun.overlay.as_ref())
+            .expect("overlay should parse");
+        assert!(overlay.enabled);
+        assert_eq!(overlay.upperdir, "../overlay/demo/upper");
+        assert_eq!(overlay.workdir, "../overlay/demo/work");
+        assert_eq!(overlay.mergeddir, "../overlay/demo/merged");
         assert!(config.linux.is_none());
     }
 
@@ -229,5 +282,26 @@ mod tests {
         .expect_err("unsupported mount type should be rejected");
 
         assert!(error.to_string().contains("unsupported mount type"));
+    }
+
+    #[test]
+    fn rejects_enabled_overlay_without_required_paths() {
+        let error = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "crun": {
+                    "overlay": {
+                        "enabled": true,
+                        "upperdir": "",
+                        "workdir": "../overlay/work",
+                        "mergeddir": "../overlay/merged"
+                    }
+                }
+            }"#,
+        )
+        .expect_err("empty overlay paths should be rejected");
+
+        assert!(error.to_string().contains("crun.overlay.upperdir"));
     }
 }

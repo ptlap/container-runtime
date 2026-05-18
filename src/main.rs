@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::cgroup::{read_stats, CgroupConfig};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
+use container_runtime::filesystem::OverlayConfig;
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::security::SecurityProfile;
@@ -268,7 +269,15 @@ fn create_container(options: RunOptions) -> Result<()> {
         bail!("container id already exists: {}", options.id);
     }
 
-    load_config(options.bundle.join("config.json"))?;
+    let config = load_config(options.bundle.join("config.json"))?;
+    let rootfs_mode =
+        if resolve_overlay_config(&options.bundle, &config.root.path, config.crun.as_ref())?
+            .is_some()
+        {
+            "overlay"
+        } else {
+            "direct"
+        };
 
     let state = ContainerState::created(
         &options.id,
@@ -278,6 +287,7 @@ fn create_container(options: RunOptions) -> Result<()> {
             security_profile: options.security_profile.as_str(),
             log_mode: options.log_mode.as_str(),
             userns_mode: options.userns_mode.as_str(),
+            rootfs_mode,
         },
     )?;
     state::save(&state)?;
@@ -319,6 +329,12 @@ fn execute_container(
     let config = load_config(config_path)?;
 
     let rootfs = bundle.join(&config.root.path);
+    let overlay_config = resolve_overlay_config(&bundle, &config.root.path, config.crun.as_ref())?;
+    let rootfs_mode = if overlay_config.is_some() {
+        "overlay"
+    } else {
+        "direct"
+    };
 
     println!("args: {:?}", config.process.args);
     println!("env: {:?}", config.process.env);
@@ -347,6 +363,7 @@ fn execute_container(
     println!("security profile: {}", security_profile.as_str());
     println!("log mode: {}", log_mode.as_str());
     println!("user namespace: {}", userns_mode.as_str());
+    println!("rootfs mode: {rootfs_mode}");
 
     let cgroup_config = config.linux.as_ref().and_then(|linux| {
         linux.resources.as_ref().map(|resources| CgroupConfig {
@@ -386,6 +403,7 @@ fn execute_container(
                     security_profile: security_profile.as_str(),
                     log_mode: log_mode.as_str(),
                     userns_mode: userns_mode.as_str(),
+                    rootfs_mode,
                 },
             )?
         };
@@ -401,6 +419,7 @@ fn execute_container(
         env: &config.process.env,
         cwd: config.process.cwd.as_deref(),
         rootfs: &rootfs,
+        overlay_config,
         readonly_rootfs: config.root.readonly,
         mounts: &config.mounts,
         log_path: capture_logs.then_some(log_path.as_path()),
@@ -428,6 +447,41 @@ fn execute_container(
     }
 
     exit_with_process_status(exit_code, exit_signal.as_deref());
+}
+
+fn resolve_overlay_config(
+    bundle: &Path,
+    root_path: &str,
+    crun: Option<&container_runtime::spec::config::CrunConfig>,
+) -> Result<Option<OverlayConfig>> {
+    let Some(overlay) = crun.and_then(|config| config.overlay.as_ref()) else {
+        return Ok(None);
+    };
+    if !overlay.enabled {
+        return Ok(None);
+    }
+
+    let lowerdir = overlay
+        .lowerdir
+        .as_deref()
+        .map(|path| resolve_bundle_path(bundle, path))
+        .unwrap_or_else(|| resolve_bundle_path(bundle, root_path));
+
+    Ok(Some(OverlayConfig {
+        lowerdir,
+        upperdir: resolve_bundle_path(bundle, &overlay.upperdir),
+        workdir: resolve_bundle_path(bundle, &overlay.workdir),
+        mergeddir: resolve_bundle_path(bundle, &overlay.mergeddir),
+    }))
+}
+
+fn resolve_bundle_path(bundle: &Path, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        bundle.join(path)
+    }
 }
 
 fn parse_network_mode(value: &str) -> Result<NetworkMode> {
@@ -526,6 +580,7 @@ fn show_state(id: &str, json: bool) -> Result<()> {
         println!("log_mode: {}", state.log_mode);
         println!("security_profile: {}", state.security_profile);
         println!("userns_mode: {}", state.userns_mode);
+        println!("rootfs_mode: {}", state.rootfs_mode);
         println!("created_at_unix: {}", state.created_at_unix);
         println!("updated_at_unix: {}", state.updated_at_unix);
         if let Some(code) = state.exit_code {
@@ -613,18 +668,19 @@ fn list_containers(json: bool) -> Result<()> {
     }
 
     println!(
-        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} BUNDLE",
-        "ID", "STATUS", "PID", "NET", "SECURITY", "USERNS"
+        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} BUNDLE",
+        "ID", "STATUS", "PID", "NET", "SECURITY", "USERNS", "ROOTFS"
     );
     for state in states {
         println!(
-            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {}",
+            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {}",
             state.id,
             format!("{:?}", state.status).to_lowercase(),
             state.pid.map_or("-".to_string(), |pid| pid.to_string()),
             state.network_mode,
             state.security_profile,
             state.userns_mode,
+            state.rootfs_mode,
             state.bundle
         );
     }

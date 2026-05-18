@@ -37,6 +37,8 @@ pub struct ContainerState {
     pub security_profile: String,
     #[serde(default = "default_userns_mode")]
     pub userns_mode: String,
+    #[serde(default = "default_rootfs_mode")]
+    pub rootfs_mode: String,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub exit_code: Option<i32>,
@@ -56,6 +58,7 @@ pub struct RuntimeMetadata<'a> {
     pub security_profile: &'a str,
     pub log_mode: &'a str,
     pub userns_mode: &'a str,
+    pub rootfs_mode: &'a str,
 }
 
 impl ContainerState {
@@ -76,6 +79,7 @@ impl ContainerState {
             log_mode: metadata.log_mode.to_string(),
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
+            rootfs_mode: metadata.rootfs_mode.to_string(),
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -106,6 +110,7 @@ impl ContainerState {
             log_mode: metadata.log_mode.to_string(),
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
+            rootfs_mode: metadata.rootfs_mode.to_string(),
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -163,6 +168,10 @@ fn default_security_profile() -> String {
 
 fn default_userns_mode() -> String {
     "host".to_string()
+}
+
+fn default_rootfs_mode() -> String {
+    "direct".to_string()
 }
 
 pub fn load(id: &str) -> Result<ContainerState> {
@@ -371,6 +380,7 @@ mod tests {
             security_profile: "default",
             log_mode: "on",
             userns_mode: "private",
+            rootfs_mode: "overlay",
         };
 
         let mut state = ContainerState::running(
@@ -405,6 +415,7 @@ mod tests {
         assert_eq!(loaded.log_mode, "on");
         assert_eq!(loaded.security_profile, "default");
         assert_eq!(loaded.userns_mode, "private");
+        assert_eq!(loaded.rootfs_mode, "overlay");
 
         state.mark_stopped(Some(0), None).expect("mark stopped");
         save_to(&root, &state).expect("stopped state should save");
@@ -426,6 +437,7 @@ mod tests {
                 security_profile: "default",
                 log_mode: "auto",
                 userns_mode: "host",
+                rootfs_mode: "direct",
             },
         )
         .expect("created state should be valid");
@@ -443,6 +455,7 @@ mod tests {
         assert_eq!(loaded.log_mode, "auto");
         assert_eq!(loaded.security_profile, "default");
         assert_eq!(loaded.userns_mode, "host");
+        assert_eq!(loaded.rootfs_mode, "direct");
 
         delete_from(&root, "demo-created").expect("created state should delete");
         assert!(!container_dir(&root, "demo-created").exists());
@@ -461,6 +474,7 @@ mod tests {
                 security_profile: "default",
                 log_mode: "auto",
                 userns_mode: "host",
+                rootfs_mode: "direct",
             },
         )
         .expect("beta state should be valid");
@@ -472,6 +486,7 @@ mod tests {
                 security_profile: "default",
                 log_mode: "auto",
                 userns_mode: "host",
+                rootfs_mode: "direct",
             },
         )
         .expect("alpha state should be valid");
@@ -510,6 +525,7 @@ mod tests {
             security_profile: "default",
             log_mode: "auto",
             userns_mode: "host",
+            rootfs_mode: "direct",
         };
 
         let state = ContainerState::running(
@@ -560,5 +576,6 @@ mod tests {
         assert_eq!(state.id, "legacy");
         assert_eq!(state.status, ContainerStatus::Created);
         assert_eq!(state.userns_mode, "host");
+        assert_eq!(state.rootfs_mode, "direct");
     }
 }

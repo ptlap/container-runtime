@@ -7,6 +7,65 @@ use std::path::{Path, PathBuf};
 
 use crate::spec::config::Mount;
 
+#[derive(Debug, Clone)]
+pub struct OverlayConfig {
+    pub lowerdir: PathBuf,
+    pub upperdir: PathBuf,
+    pub workdir: PathBuf,
+    pub mergeddir: PathBuf,
+}
+
+pub fn setup_overlay_rootfs(config: &OverlayConfig) -> Result<PathBuf> {
+    if !config.lowerdir.exists() {
+        anyhow::bail!(
+            "overlay lowerdir does not exist: {}",
+            config.lowerdir.display()
+        );
+    }
+
+    fs::create_dir_all(&config.upperdir).with_context(|| {
+        format!(
+            "failed to create overlay upperdir: {}",
+            config.upperdir.display()
+        )
+    })?;
+    fs::create_dir_all(&config.workdir).with_context(|| {
+        format!(
+            "failed to create overlay workdir: {}",
+            config.workdir.display()
+        )
+    })?;
+    fs::create_dir_all(&config.mergeddir).with_context(|| {
+        format!(
+            "failed to create overlay mergeddir: {}",
+            config.mergeddir.display()
+        )
+    })?;
+
+    let data = format!(
+        "lowerdir={},upperdir={},workdir={}",
+        config.lowerdir.display(),
+        config.upperdir.display(),
+        config.workdir.display()
+    );
+
+    mount(
+        Some("overlay"),
+        config.mergeddir.as_path(),
+        Some("overlay"),
+        MsFlags::empty(),
+        Some(data.as_str()),
+    )
+    .with_context(|| {
+        format!(
+            "failed to mount overlay rootfs at {}",
+            config.mergeddir.display()
+        )
+    })?;
+
+    Ok(config.mergeddir.clone())
+}
+
 pub fn setup_rootfs(rootfs: &Path, readonly: bool, mounts: &[Mount]) -> Result<()> {
     mount(
         Some(rootfs),

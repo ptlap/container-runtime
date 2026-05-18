@@ -1,5 +1,5 @@
 use crate::cgroup::{Cgroup, CgroupConfig};
-use crate::filesystem::setup_rootfs;
+use crate::filesystem::{setup_overlay_rootfs, setup_rootfs, OverlayConfig};
 use crate::network::{
     allocate_bridge_network, cleanup_nat, cleanup_veth_host, release_bridge_network,
     setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NetworkMode,
@@ -34,6 +34,7 @@ pub struct ProcessConfig<'a> {
     pub env: &'a [String],
     pub cwd: Option<&'a str>,
     pub rootfs: &'a Path,
+    pub overlay_config: Option<OverlayConfig>,
     pub readonly_rootfs: bool,
     pub mounts: &'a [Mount],
     pub log_path: Option<&'a Path>,
@@ -57,6 +58,7 @@ struct ChildConfig<'a> {
     cwd: Option<&'a str>,
     hostname: Option<&'a str>,
     rootfs: &'a Path,
+    overlay_config: Option<OverlayConfig>,
     readonly_rootfs: bool,
     mounts: &'a [Mount],
     network_mode: NetworkMode,
@@ -178,6 +180,7 @@ pub fn run_process(
                 cwd: config.cwd,
                 hostname: config.hostname,
                 rootfs: config.rootfs,
+                overlay_config: config.overlay_config,
                 readonly_rootfs: config.readonly_rootfs,
                 mounts: config.mounts,
                 network_mode: config.network_mode,
@@ -476,7 +479,15 @@ fn run_child(
     mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
         .context("failed to make mounts private")?;
 
-    setup_rootfs(config.rootfs, config.readonly_rootfs, config.mounts)?;
+    let overlay_rootfs;
+    let rootfs = if let Some(overlay_config) = config.overlay_config.as_ref() {
+        overlay_rootfs = setup_overlay_rootfs(overlay_config)?;
+        overlay_rootfs.as_path()
+    } else {
+        config.rootfs
+    };
+
+    setup_rootfs(rootfs, config.readonly_rootfs, config.mounts)?;
 
     if let Some(hostname) = config.hostname {
         set_container_hostname(hostname)?;
