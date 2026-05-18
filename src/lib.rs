@@ -5,6 +5,7 @@ pub mod filesystem;
 pub mod namespace;
 pub mod network;
 pub mod security;
+pub mod selfexec;
 pub mod signal;
 pub mod spec;
 pub mod state;

@@ -6,6 +6,7 @@ use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::security::SecurityProfile;
+use container_runtime::selfexec::ensure_reexecuted_from_memfd;
 use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
 use container_runtime::spec::config::load_config;
 use container_runtime::state::{
@@ -181,6 +182,8 @@ struct RunOptions {
 }
 
 fn main() -> Result<()> {
+    ensure_reexecuted_from_memfd()?;
+
     let cli = Cli::parse();
 
     match cli.command {
