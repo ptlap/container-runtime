@@ -10,10 +10,12 @@ use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
 use container_runtime::spec::config::load_config;
 use container_runtime::state::{self, ContainerState, ContainerStatus};
 use nix::sched::CloneFlags;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{fs, io};
 
 const DEFAULT_STOP_TIMEOUT_SECS: u64 = 10;
 
@@ -32,6 +34,8 @@ enum Command {
         net: CliNetworkMode,
         #[arg(long, value_enum, default_value_t = CliSecurityProfile::Default)]
         security: CliSecurityProfile,
+        #[arg(long, value_enum, default_value_t = CliLogMode::Auto)]
+        log: CliLogMode,
         id: String,
         bundle: PathBuf,
     },
@@ -40,6 +44,8 @@ enum Command {
         net: CliNetworkMode,
         #[arg(long, value_enum, default_value_t = CliSecurityProfile::Default)]
         security: CliSecurityProfile,
+        #[arg(long, value_enum, default_value_t = CliLogMode::Auto)]
+        log: CliLogMode,
         id: String,
         bundle: PathBuf,
     },
@@ -64,6 +70,11 @@ enum Command {
         id: String,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+    Logs {
+        id: String,
+        #[arg(long)]
+        follow: bool,
     },
     Kill {
         id: String,
@@ -93,6 +104,20 @@ enum CliSecurityProfile {
     Unconfined,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliLogMode {
+    Auto,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LogMode {
+    Auto,
+    On,
+    Off,
+}
+
 impl From<CliNetworkMode> for NetworkMode {
     fn from(value: CliNetworkMode) -> Self {
         match value {
@@ -112,12 +137,33 @@ impl From<CliSecurityProfile> for SecurityProfile {
     }
 }
 
+impl From<CliLogMode> for LogMode {
+    fn from(value: CliLogMode) -> Self {
+        match value {
+            CliLogMode::Auto => Self::Auto,
+            CliLogMode::On => Self::On,
+            CliLogMode::Off => Self::Off,
+        }
+    }
+}
+
+impl LogMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RunOptions {
     id: String,
     bundle: PathBuf,
     network_mode: NetworkMode,
     security_profile: SecurityProfile,
+    log_mode: LogMode,
 }
 
 fn main() -> Result<()> {
@@ -127,6 +173,7 @@ fn main() -> Result<()> {
         Command::Run {
             net,
             security,
+            log,
             id,
             bundle,
         } => run_container(RunOptions {
@@ -134,10 +181,12 @@ fn main() -> Result<()> {
             bundle,
             network_mode: net.into(),
             security_profile: security.into(),
+            log_mode: log.into(),
         })?,
         Command::Create {
             net,
             security,
+            log,
             id,
             bundle,
         } => create_container(RunOptions {
@@ -145,12 +194,14 @@ fn main() -> Result<()> {
             bundle,
             network_mode: net.into(),
             security_profile: security.into(),
+            log_mode: log.into(),
         })?,
         Command::Start { id } => start_container(&id)?,
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
         Command::Ps { json } => list_containers(json)?,
         Command::Exec { id, args } => exec_container(&id, &args)?,
+        Command::Logs { id, follow } => show_logs(&id, follow)?,
         Command::Kill { id, signal } => kill_container(&id, &signal)?,
         Command::Stop { id, timeout } => stop_container(&id, timeout)?,
         Command::Delete { id } => delete_container(&id)?,
@@ -179,6 +230,7 @@ fn create_container(options: RunOptions) -> Result<()> {
         &options.bundle,
         options.network_mode.as_str(),
         options.security_profile.as_str(),
+        options.log_mode.as_str(),
     )?;
     state::save(&state)?;
     println!("created container: {}", options.id);
@@ -197,6 +249,7 @@ fn start_container(id: &str) -> Result<()> {
         bundle: PathBuf::from(&state.bundle),
         network_mode: parse_network_mode(&state.network_mode)?,
         security_profile: parse_security_profile(&state.security_profile)?,
+        log_mode: parse_log_mode(&state.log_mode)?,
     };
 
     execute_container(options, Some(state))
@@ -210,6 +263,7 @@ fn execute_container(
     let bundle = options.bundle;
     let network_mode = options.network_mode;
     let security_profile = options.security_profile;
+    let log_mode = options.log_mode;
 
     let config_path = bundle.join("config.json");
     let config = load_config(config_path)?;
@@ -238,15 +292,19 @@ fn execute_container(
     println!("clone flags: {:?}", flags);
     println!("network mode: {}", network_mode.as_str());
     println!("security profile: {}", security_profile.as_str());
+    println!("log mode: {}", log_mode.as_str());
 
     let cgroup_config = config.linux.as_ref().and_then(|linux| {
         linux.resources.as_ref().map(|resources| CgroupConfig {
             memory_limit: resources.memory.as_ref().and_then(|m| m.limit),
             cpu_quota: resources.cpu.as_ref().and_then(|c| c.quota),
             cpu_period: resources.cpu.as_ref().and_then(|c| c.period),
+            pids_limit: resources.pids.as_ref().and_then(|p| p.limit),
         })
     });
 
+    let log_path = state::log_path(&id)?;
+    let capture_logs = should_capture_logs(log_mode);
     let mut running_state = None;
     let mut save_started_state = |started: container_runtime::container::StartedProcess| {
         let cgroup_path = started
@@ -254,8 +312,15 @@ fn execute_container(
             .as_ref()
             .map(|path| path.display().to_string());
         let network_subnet = started.network_subnet.clone();
+        let log_path = capture_logs.then(|| log_path.display().to_string());
         let state = if let Some(mut state) = existing_state.take() {
-            state.mark_running(started.pid, cgroup_path, network_subnet)?;
+            state.mark_running(
+                started.pid,
+                cgroup_path,
+                network_subnet,
+                log_path,
+                log_mode.as_str(),
+            )?;
             state
         } else {
             ContainerState::running(
@@ -264,8 +329,10 @@ fn execute_container(
                 started.pid,
                 cgroup_path,
                 network_subnet,
+                log_path,
                 network_mode.as_str(),
                 security_profile.as_str(),
+                log_mode.as_str(),
             )?
         };
         state::save(&state)?;
@@ -275,11 +342,14 @@ fn execute_container(
 
     let process_config = ProcessConfig {
         id: &id,
+        hostname: config.hostname.as_deref(),
         args: &config.process.args,
         env: &config.process.env,
         cwd: config.process.cwd.as_deref(),
         rootfs: &rootfs,
         readonly_rootfs: config.root.readonly,
+        mounts: &config.mounts,
+        log_path: capture_logs.then_some(log_path.as_path()),
         flags,
         cgroup_config,
         network_mode,
@@ -322,6 +392,15 @@ fn parse_security_profile(value: &str) -> Result<SecurityProfile> {
     }
 }
 
+fn parse_log_mode(value: &str) -> Result<LogMode> {
+    match value {
+        "auto" => Ok(LogMode::Auto),
+        "on" => Ok(LogMode::On),
+        "off" => Ok(LogMode::Off),
+        _ => bail!("invalid log mode in state: {value}"),
+    }
+}
+
 fn show_state(id: &str, json: bool) -> Result<()> {
     let state = state::load_current(id)?;
 
@@ -343,6 +422,10 @@ fn show_state(id: &str, json: bool) -> Result<()> {
         if let Some(subnet) = state.network_subnet {
             println!("network_subnet: {subnet}");
         }
+        if let Some(log_path) = state.log_path {
+            println!("log_path: {log_path}");
+        }
+        println!("log_mode: {}", state.log_mode);
         println!("security_profile: {}", state.security_profile);
         println!("created_at_unix: {}", state.created_at_unix);
         println!("updated_at_unix: {}", state.updated_at_unix);
@@ -486,6 +569,49 @@ fn process_exit_status(code: Option<i32>, signal: Option<&str>) -> i32 {
     }
 }
 
+fn should_capture_logs(log_mode: LogMode) -> bool {
+    match log_mode {
+        LogMode::Auto => !io::stdin().is_terminal(),
+        LogMode::On => true,
+        LogMode::Off => false,
+    }
+}
+
+fn show_logs(id: &str, follow: bool) -> Result<()> {
+    let state = state::load_current(id)?;
+    let log_path = state
+        .log_path
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or(state::log_path(id)?);
+
+    if follow {
+        follow_logs(&log_path)?;
+    } else {
+        let content = fs::read_to_string(&log_path)
+            .with_context(|| format!("failed to read log file: {}", log_path.display()))?;
+        print!("{content}");
+    }
+
+    Ok(())
+}
+
+fn follow_logs(log_path: &Path) -> Result<()> {
+    let mut position = 0usize;
+
+    loop {
+        if let Ok(content) = fs::read_to_string(log_path) {
+            if content.len() > position {
+                print!("{}", &content[position..]);
+                position = content.len();
+            }
+        }
+
+        io::Write::flush(&mut io::stdout()).context("failed to flush stdout")?;
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
 fn kill_container(id: &str, signal: &str) -> Result<()> {
     let state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
@@ -566,5 +692,11 @@ mod tests {
     fn maps_signal_and_missing_status_to_nonzero_cli_status() {
         assert_eq!(process_exit_status(None, Some("SIGKILL")), 128);
         assert_eq!(process_exit_status(None, None), 1);
+    }
+
+    #[test]
+    fn does_not_capture_logs_for_interactive_shell() {
+        assert!(should_capture_logs(LogMode::On));
+        assert!(!should_capture_logs(LogMode::Off));
     }
 }

@@ -5,8 +5,14 @@ use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct OciConfig {
+    #[serde(default)]
+    pub hostname: Option<String>,
+
     pub process: Process,
     pub root: Root,
+
+    #[serde(default)]
+    pub mounts: Vec<Mount>,
 
     #[serde(default)]
     pub linux: Option<Linux>,
@@ -32,6 +38,20 @@ pub struct Root {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Mount {
+    pub destination: String,
+
+    #[serde(default)]
+    pub source: Option<String>,
+
+    #[serde(rename = "type")]
+    pub mount_type: String,
+
+    #[serde(default)]
+    pub options: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Linux {
     #[serde(default)]
     pub namespaces: Vec<LinuxNamespace>,
@@ -53,6 +73,9 @@ pub struct LinuxResources {
 
     #[serde(default)]
     pub cpu: Option<LinuxCpu>,
+
+    #[serde(default)]
+    pub pids: Option<LinuxPids>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +93,12 @@ pub struct LinuxCpu {
     pub period: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LinuxPids {
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
 impl OciConfig {
     pub fn validate(&self) -> Result<()> {
         if self.process.args.is_empty() {
@@ -78,6 +107,18 @@ impl OciConfig {
 
         if self.root.path.trim().is_empty() {
             bail!("root.path must not be empty");
+        }
+
+        for mount in &self.mounts {
+            if mount.destination.trim().is_empty() {
+                bail!("mount.destination must not be empty");
+            }
+            if mount.mount_type != "bind" {
+                bail!("unsupported mount type: {}", mount.mount_type);
+            }
+            if mount.source.as_deref().unwrap_or("").trim().is_empty() {
+                bail!("bind mount source must not be empty");
+            }
         }
 
         Ok(())
@@ -114,19 +155,33 @@ mod tests {
                     "env": ["PATH=/bin"],
                     "cwd": "/tmp"
                 },
+                "hostname": "demo",
                 "root": {
                     "path": "rootfs",
                     "readonly": true
-                }
+                },
+                "mounts": [
+                    {
+                        "destination": "/data",
+                        "source": "/tmp/data",
+                        "type": "bind",
+                        "options": ["rbind", "ro"]
+                    }
+                ]
             }"#,
         )
         .expect("valid config");
 
+        assert_eq!(config.hostname.as_deref(), Some("demo"));
         assert_eq!(config.process.args, ["/bin/sh"]);
         assert_eq!(config.process.env, ["PATH=/bin"]);
         assert_eq!(config.process.cwd.as_deref(), Some("/tmp"));
         assert_eq!(config.root.path, "rootfs");
         assert!(config.root.readonly);
+        assert_eq!(config.mounts.len(), 1);
+        assert_eq!(config.mounts[0].destination, "/data");
+        assert_eq!(config.mounts[0].source.as_deref(), Some("/tmp/data"));
+        assert_eq!(config.mounts[0].mount_type, "bind");
         assert!(config.linux.is_none());
     }
 
@@ -154,5 +209,25 @@ mod tests {
         .expect_err("empty root path should be rejected");
 
         assert!(error.to_string().contains("root.path"));
+    }
+
+    #[test]
+    fn rejects_unsupported_mount_type() {
+        let error = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "mounts": [
+                    {
+                        "destination": "/data",
+                        "source": "/tmp/data",
+                        "type": "tmpfs"
+                    }
+                ]
+            }"#,
+        )
+        .expect_err("unsupported mount type should be rejected");
+
+        assert!(error.to_string().contains("unsupported mount type"));
     }
 }

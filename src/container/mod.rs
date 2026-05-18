@@ -5,13 +5,17 @@ use crate::network::{
     setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NetworkMode,
 };
 use crate::security::{self, SecurityProfile};
+use crate::spec::config::Mount;
 use anyhow::{bail, Context, Result};
+use nix::libc;
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{chdir, close, execvp, fork, pipe, read, write, ForkResult};
 use std::ffi::CString;
-use std::os::fd::OwnedFd;
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -24,11 +28,14 @@ pub struct ProcessExit {
 
 pub struct ProcessConfig<'a> {
     pub id: &'a str,
+    pub hostname: Option<&'a str>,
     pub args: &'a [String],
     pub env: &'a [String],
     pub cwd: Option<&'a str>,
     pub rootfs: &'a Path,
     pub readonly_rootfs: bool,
+    pub mounts: &'a [Mount],
+    pub log_path: Option<&'a Path>,
     pub flags: CloneFlags,
     pub cgroup_config: Option<CgroupConfig>,
     pub network_mode: NetworkMode,
@@ -46,8 +53,10 @@ struct ChildConfig<'a> {
     args: &'a [String],
     env: &'a [String],
     cwd: Option<&'a str>,
+    hostname: Option<&'a str>,
     rootfs: &'a Path,
     readonly_rootfs: bool,
+    mounts: &'a [Mount],
     network_mode: NetworkMode,
     security_profile: SecurityProfile,
     child_flags: CloneFlags,
@@ -119,6 +128,12 @@ pub fn run_process(
 
     let (read_fd, write_fd) = pipe().context("failed to create sync pipe")?;
     let (error_read_fd, error_write_fd) = pipe().context("failed to create child error pipe")?;
+    let log_pipe = create_log_pipe(config.log_path)?;
+    let (mut log_write_fd, log_helper) = start_log_helper(
+        log_pipe,
+        config.log_path,
+        &[&read_fd, &write_fd, &error_read_fd, &error_write_fd],
+    )?;
 
     let parent_flags = config.flags & CloneFlags::CLONE_NEWPID;
 
@@ -133,13 +148,19 @@ pub fn run_process(
         ForkResult::Child => {
             close(write_fd).ok();
             close(error_read_fd).ok();
+            if let Some(log_write_fd) = log_write_fd.take() {
+                redirect_stdio_to_log(&log_write_fd)?;
+                close(log_write_fd).ok();
+            }
 
             let child_config = ChildConfig {
                 args: config.args,
                 env: config.env,
                 cwd: config.cwd,
+                hostname: config.hostname,
                 rootfs: config.rootfs,
                 readonly_rootfs: config.readonly_rootfs,
+                mounts: config.mounts,
                 network_mode: config.network_mode,
                 security_profile: config.security_profile,
                 child_flags,
@@ -158,6 +179,9 @@ pub fn run_process(
         ForkResult::Parent { child } => {
             close(read_fd).ok();
             close(error_write_fd).ok();
+            if let Some(log_write_fd) = log_write_fd.take() {
+                close(log_write_fd).ok();
+            }
             let child_pid = child.as_raw();
             let mut resources = ParentResources::new(config.id);
 
@@ -207,6 +231,7 @@ pub fn run_process(
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
             let child_error = read_child_error(error_read_fd)?;
+            wait_for_log_helper(log_helper)?;
 
             match status {
                 WaitStatus::Exited(_, code) => {
@@ -246,6 +271,110 @@ pub fn run_process(
     };
 
     Ok(process_exit)
+}
+
+fn create_log_pipe(log_path: Option<&Path>) -> Result<Option<(OwnedFd, OwnedFd)>> {
+    let Some(path) = log_path else {
+        return Ok(None);
+    };
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create log directory: {}", parent.display()))?;
+    }
+
+    Ok(Some(pipe().context("failed to create log pipe")?))
+}
+
+fn redirect_stdio_to_log(log_write_fd: &OwnedFd) -> Result<()> {
+    let fd = log_write_fd.as_raw_fd();
+    duplicate_fd(fd, libc::STDOUT_FILENO).context("failed to redirect stdout to log pipe")?;
+    duplicate_fd(fd, libc::STDERR_FILENO).context("failed to redirect stderr to log pipe")?;
+    Ok(())
+}
+
+fn duplicate_fd(from: i32, to: i32) -> Result<()> {
+    let result = unsafe { libc::dup2(from, to) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error()).context("dup2 failed");
+    }
+
+    Ok(())
+}
+
+fn start_log_helper(
+    log_pipe: Option<(OwnedFd, OwnedFd)>,
+    log_path: Option<&Path>,
+    inherited_control_fds: &[&OwnedFd],
+) -> Result<(Option<OwnedFd>, Option<nix::unistd::Pid>)> {
+    let Some((read_fd, write_fd)) = log_pipe else {
+        return Ok((None, None));
+    };
+    let path = log_path
+        .context("log path is required when log pipe exists")?
+        .to_path_buf();
+
+    match unsafe { fork() }.context("failed to fork log helper")? {
+        ForkResult::Child => {
+            for fd in inherited_control_fds {
+                close_raw_fd(fd);
+            }
+            close(write_fd).ok();
+            if let Err(error) = pump_logs(read_fd, path) {
+                eprintln!("log helper error: {error}");
+                std::process::exit(1);
+            }
+            std::process::exit(0);
+        }
+        ForkResult::Parent { child } => {
+            close(read_fd).ok();
+            Ok((Some(write_fd), Some(child)))
+        }
+    }
+}
+
+fn close_raw_fd(fd: &OwnedFd) {
+    unsafe {
+        libc::close(fd.as_raw_fd());
+    }
+}
+
+fn pump_logs(read_fd: OwnedFd, log_path: PathBuf) -> Result<()> {
+    let mut log_file = File::create(&log_path)
+        .with_context(|| format!("failed to create container log: {}", log_path.display()))?;
+    let mut stdout = io::stdout().lock();
+    let mut buf = [0u8; 8192];
+
+    loop {
+        let count = read(&read_fd, &mut buf).context("failed to read container log pipe")?;
+        if count == 0 {
+            break;
+        }
+        stdout
+            .write_all(&buf[..count])
+            .context("failed to write container output to stdout")?;
+        stdout.flush().context("failed to flush stdout")?;
+        log_file
+            .write_all(&buf[..count])
+            .context("failed to write container log")?;
+        log_file.flush().context("failed to flush container log")?;
+    }
+
+    close(read_fd).ok();
+    Ok(())
+}
+
+fn wait_for_log_helper(log_helper: Option<nix::unistd::Pid>) -> Result<()> {
+    let Some(log_helper) = log_helper else {
+        return Ok(());
+    };
+
+    match waitpid(log_helper, None).context("failed to wait for log helper")? {
+        WaitStatus::Exited(_, 0) => Ok(()),
+        WaitStatus::Exited(_, code) => bail!("log helper exited with code: {code}"),
+        WaitStatus::Signaled(_, signal, _) => bail!("log helper killed by signal: {signal:?}"),
+        other => bail!("log helper ended with status: {other:?}"),
+    }
 }
 
 fn write_child_error(error_write_fd: &OwnedFd, error: &anyhow::Error) -> Result<()> {
@@ -302,7 +431,11 @@ fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
     mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
         .context("failed to make mounts private")?;
 
-    setup_rootfs(config.rootfs, config.readonly_rootfs)?;
+    setup_rootfs(config.rootfs, config.readonly_rootfs, config.mounts)?;
+
+    if let Some(hostname) = config.hostname {
+        set_container_hostname(hostname)?;
+    }
 
     if let Some(cwd) = config.cwd {
         chdir(cwd).with_context(|| format!("failed to chdir to process cwd: {cwd}"))?;
@@ -319,6 +452,17 @@ fn run_child(config: ChildConfig<'_>, read_fd: OwnedFd) -> Result<()> {
     execvp(&command, &c_args).context("failed to exec process")?;
 
     unreachable!();
+}
+
+fn set_container_hostname(hostname: &str) -> Result<()> {
+    let bytes = hostname.as_bytes();
+    let result = unsafe { libc::sethostname(bytes.as_ptr().cast(), bytes.len()) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("failed to set hostname: {hostname}"));
+    }
+
+    Ok(())
 }
 
 fn read_parent_signal(read_fd: OwnedFd) -> Result<String> {

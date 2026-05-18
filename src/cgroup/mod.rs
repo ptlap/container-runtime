@@ -12,6 +12,7 @@ pub struct CgroupConfig {
     pub memory_limit: Option<i64>,
     pub cpu_quota: Option<i64>,
     pub cpu_period: Option<u64>,
+    pub pids_limit: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -57,6 +58,14 @@ impl Cgroup {
             let cpu_period = config.cpu_period.unwrap_or(100_000);
             fs::write(path.join("cpu.max"), format!("{cpu_quota} {cpu_period}"))
                 .context("failed to write cpu.max")?;
+        }
+
+        if let Some(pids_limit) = config.pids_limit {
+            if pids_limit <= 0 {
+                anyhow::bail!("pids_limit must > 0, got {pids_limit}");
+            }
+            fs::write(path.join("pids.max"), pids_limit.to_string())
+                .context("failed to write pids.max")?;
         }
 
         Ok(Self { path })

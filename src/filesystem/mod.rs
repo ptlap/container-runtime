@@ -3,9 +3,11 @@ use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use nix::unistd::{chdir, pivot_root};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-pub fn setup_rootfs(rootfs: &Path, readonly: bool) -> Result<()> {
+use crate::spec::config::Mount;
+
+pub fn setup_rootfs(rootfs: &Path, readonly: bool, mounts: &[Mount]) -> Result<()> {
     mount(
         Some(rootfs),
         rootfs,
@@ -14,6 +16,8 @@ pub fn setup_rootfs(rootfs: &Path, readonly: bool) -> Result<()> {
         None::<&str>,
     )
     .context("failed to bind mount rootfs")?;
+
+    setup_mounts(rootfs, mounts)?;
 
     let old_root = rootfs.join(".old_root");
 
@@ -52,6 +56,89 @@ pub fn setup_rootfs(rootfs: &Path, readonly: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn setup_mounts(rootfs: &Path, mounts: &[Mount]) -> Result<()> {
+    for mount_config in mounts {
+        setup_bind_mount(rootfs, mount_config)?;
+    }
+
+    Ok(())
+}
+
+fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
+    let source = mount_config
+        .source
+        .as_deref()
+        .context("bind mount source is required")?;
+    let destination = container_mount_destination(rootfs, &mount_config.destination)?;
+
+    fs::create_dir_all(&destination).with_context(|| {
+        format!(
+            "failed to create mount destination: {}",
+            destination.display()
+        )
+    })?;
+
+    let recursive = mount_config
+        .options
+        .iter()
+        .any(|option| option == "rbind" || option == "rshared");
+    let readonly = mount_config.options.iter().any(|option| option == "ro");
+
+    let mut flags = MsFlags::MS_BIND;
+    if recursive {
+        flags |= MsFlags::MS_REC;
+    }
+
+    mount(
+        Some(Path::new(source)),
+        destination.as_path(),
+        None::<&str>,
+        flags,
+        None::<&str>,
+    )
+    .with_context(|| {
+        format!(
+            "failed to bind mount {} to {}",
+            source,
+            destination.display()
+        )
+    })?;
+
+    if readonly {
+        mount::<Path, Path, str, str>(
+            None,
+            destination.as_path(),
+            None,
+            MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+            None,
+        )
+        .with_context(|| {
+            format!(
+                "failed to remount bind mount readonly: {}",
+                destination.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn container_mount_destination(rootfs: &Path, destination: &str) -> Result<PathBuf> {
+    let destination = Path::new(destination);
+    if !destination.is_absolute() {
+        anyhow::bail!(
+            "mount destination must be absolute: {}",
+            destination.display()
+        );
+    }
+
+    let relative = destination
+        .strip_prefix("/")
+        .context("failed to normalize mount destination")?;
+
+    Ok(rootfs.join(relative))
 }
 
 fn remount_root_readonly() -> Result<()> {
