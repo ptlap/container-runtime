@@ -17,14 +17,17 @@ use container_runtime::state::{
 };
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
 use nix::sched::CloneFlags;
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{fs, io};
 
 const DEFAULT_STOP_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_EVENTS_INTERVAL_MS: u64 = 1000;
 
 #[derive(Debug, Parser)]
 #[command(name = "crun")]
@@ -82,6 +85,13 @@ enum Command {
         id: String,
         #[arg(long)]
         json: bool,
+    },
+    Events {
+        id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = DEFAULT_EVENTS_INTERVAL_MS)]
+        interval_ms: u64,
     },
     Ps {
         #[arg(long)]
@@ -272,6 +282,11 @@ fn main() -> Result<()> {
         Command::Start { id } => start_container(&id)?,
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
+        Command::Events {
+            id,
+            json,
+            interval_ms,
+        } => stream_events(&id, json, interval_ms)?,
         Command::Ps { json } => list_containers(json)?,
         Command::Exec { tty, id, args } => exec_container(&id, &args, tty)?,
         Command::Logs { id, follow } => show_logs(&id, follow)?,
@@ -741,6 +756,208 @@ fn show_stats(id: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct RuntimeEvent {
+    timestamp_unix: u64,
+    id: String,
+    source: String,
+    name: String,
+    value: Option<u64>,
+    delta: Option<u64>,
+    status: Option<String>,
+}
+
+fn stream_events(id: &str, json: bool, interval_ms: u64) -> Result<()> {
+    if interval_ms == 0 {
+        bail!("events interval must be greater than zero");
+    }
+
+    let state = state::load_current(id)?;
+    if state.status != ContainerStatus::Running {
+        bail!("container {id} is not running");
+    }
+
+    let Some(cgroup_path) = state.cgroup_path.as_deref() else {
+        bail!("container {id} has no cgroup path");
+    };
+    let cgroup_path = PathBuf::from(cgroup_path);
+    if !cgroup_path.exists() {
+        bail!("cgroup path does not exist: {}", cgroup_path.display());
+    }
+
+    let mut previous = EventSnapshot::from_stats(&read_stats(&cgroup_path)?);
+    let interval = Duration::from_millis(interval_ms);
+
+    loop {
+        thread::sleep(interval);
+
+        let state = state::load_current(id)?;
+        if state.status != ContainerStatus::Running {
+            print_event(
+                RuntimeEvent {
+                    timestamp_unix: unix_timestamp(),
+                    id: id.to_string(),
+                    source: "lifecycle".to_string(),
+                    name: "stopped".to_string(),
+                    value: None,
+                    delta: None,
+                    status: Some(container_status_name(&state.status).to_string()),
+                },
+                json,
+            )?;
+            break;
+        }
+
+        let current_stats = read_stats(&cgroup_path)?;
+        let current = EventSnapshot::from_stats(&current_stats);
+        for event in collect_counter_events(id, &previous, &current) {
+            print_event(event, json)?;
+        }
+        previous = current;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EventSnapshot {
+    memory_events: BTreeMap<String, u64>,
+    pids_events: BTreeMap<String, u64>,
+    cpu_nr_throttled: Option<u64>,
+    cpu_throttled_usec: Option<u64>,
+}
+
+impl EventSnapshot {
+    fn from_stats(stats: &container_runtime::cgroup::CgroupStats) -> Self {
+        Self {
+            memory_events: stats.memory.events.clone(),
+            pids_events: stats.pids.events.clone(),
+            cpu_nr_throttled: stats.cpu.nr_throttled,
+            cpu_throttled_usec: stats.cpu.throttled_usec,
+        }
+    }
+}
+
+fn collect_counter_events(
+    id: &str,
+    previous: &EventSnapshot,
+    current: &EventSnapshot,
+) -> Vec<RuntimeEvent> {
+    let mut events = Vec::new();
+    append_counter_events(
+        &mut events,
+        id,
+        "memory",
+        &previous.memory_events,
+        &current.memory_events,
+    );
+    append_counter_events(
+        &mut events,
+        id,
+        "pids",
+        &previous.pids_events,
+        &current.pids_events,
+    );
+
+    if let (Some(previous), Some(current)) = (previous.cpu_nr_throttled, current.cpu_nr_throttled) {
+        if current > previous {
+            events.push(counter_event(
+                id,
+                "cpu",
+                "nr_throttled",
+                current,
+                current - previous,
+            ));
+        }
+    }
+
+    if let (Some(previous), Some(current)) =
+        (previous.cpu_throttled_usec, current.cpu_throttled_usec)
+    {
+        if current > previous {
+            events.push(counter_event(
+                id,
+                "cpu",
+                "throttled_usec",
+                current,
+                current - previous,
+            ));
+        }
+    }
+
+    events
+}
+
+fn append_counter_events(
+    events: &mut Vec<RuntimeEvent>,
+    id: &str,
+    source: &str,
+    previous: &BTreeMap<String, u64>,
+    current: &BTreeMap<String, u64>,
+) {
+    for (name, current_value) in current {
+        let previous_value = previous.get(name).copied().unwrap_or(0);
+        if *current_value > previous_value {
+            events.push(counter_event(
+                id,
+                source,
+                name,
+                *current_value,
+                *current_value - previous_value,
+            ));
+        }
+    }
+}
+
+fn counter_event(id: &str, source: &str, name: &str, value: u64, delta: u64) -> RuntimeEvent {
+    RuntimeEvent {
+        timestamp_unix: unix_timestamp(),
+        id: id.to_string(),
+        source: source.to_string(),
+        name: name.to_string(),
+        value: Some(value),
+        delta: Some(delta),
+        status: None,
+    }
+}
+
+fn print_event(event: RuntimeEvent, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string(&event)?);
+    } else if let Some(status) = event.status.as_deref() {
+        println!(
+            "{} {} {} status={}",
+            event.timestamp_unix, event.source, event.name, status
+        );
+    } else {
+        println!(
+            "{} {} {} value={} delta={}",
+            event.timestamp_unix,
+            event.source,
+            event.name,
+            event.value.unwrap_or(0),
+            event.delta.unwrap_or(0)
+        );
+    }
+
+    Ok(())
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn container_status_name(status: &ContainerStatus) -> &'static str {
+    match status {
+        ContainerStatus::Created => "created",
+        ContainerStatus::Running => "running",
+        ContainerStatus::Stopped => "stopped",
+    }
+}
+
 fn list_containers(json: bool) -> Result<()> {
     let states = state::list()?;
 
@@ -946,5 +1163,55 @@ mod tests {
     fn does_not_capture_logs_for_interactive_shell() {
         assert!(should_capture_logs(LogMode::On));
         assert!(!should_capture_logs(LogMode::Off));
+    }
+
+    #[test]
+    fn collects_counter_events_for_increasing_values() {
+        let previous = EventSnapshot {
+            memory_events: BTreeMap::from([("oom_kill".to_string(), 1)]),
+            pids_events: BTreeMap::from([("max".to_string(), 0)]),
+            cpu_nr_throttled: Some(2),
+            cpu_throttled_usec: Some(100),
+        };
+        let current = EventSnapshot {
+            memory_events: BTreeMap::from([("oom_kill".to_string(), 3)]),
+            pids_events: BTreeMap::from([("max".to_string(), 1)]),
+            cpu_nr_throttled: Some(5),
+            cpu_throttled_usec: Some(140),
+        };
+
+        let events = collect_counter_events("demo", &previous, &current);
+
+        assert_eq!(events.len(), 4);
+        assert!(events
+            .iter()
+            .any(|event| event.source == "memory" && event.name == "oom_kill"));
+        assert!(events
+            .iter()
+            .any(|event| event.source == "pids" && event.name == "max"));
+        assert!(events
+            .iter()
+            .any(|event| event.source == "cpu" && event.name == "nr_throttled"));
+        assert!(events
+            .iter()
+            .any(|event| event.source == "cpu" && event.name == "throttled_usec"));
+    }
+
+    #[test]
+    fn ignores_counter_events_without_increase() {
+        let previous = EventSnapshot {
+            memory_events: BTreeMap::from([("oom".to_string(), 1)]),
+            pids_events: BTreeMap::new(),
+            cpu_nr_throttled: Some(2),
+            cpu_throttled_usec: Some(100),
+        };
+        let current = EventSnapshot {
+            memory_events: BTreeMap::from([("oom".to_string(), 1)]),
+            pids_events: BTreeMap::new(),
+            cpu_nr_throttled: Some(2),
+            cpu_throttled_usec: Some(100),
+        };
+
+        assert!(collect_counter_events("demo", &previous, &current).is_empty());
     }
 }
