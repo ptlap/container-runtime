@@ -39,6 +39,8 @@ pub struct ContainerState {
     pub userns_mode: String,
     #[serde(default = "default_rootfs_mode")]
     pub rootfs_mode: String,
+    #[serde(default)]
+    pub tty: bool,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub exit_code: Option<i32>,
@@ -59,6 +61,7 @@ pub struct RuntimeMetadata<'a> {
     pub log_mode: &'a str,
     pub userns_mode: &'a str,
     pub rootfs_mode: &'a str,
+    pub tty: bool,
 }
 
 impl ContainerState {
@@ -80,6 +83,7 @@ impl ContainerState {
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
             rootfs_mode: metadata.rootfs_mode.to_string(),
+            tty: metadata.tty,
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -111,6 +115,7 @@ impl ContainerState {
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
             rootfs_mode: metadata.rootfs_mode.to_string(),
+            tty: metadata.tty,
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -381,6 +386,7 @@ mod tests {
             log_mode: "on",
             userns_mode: "private",
             rootfs_mode: "overlay",
+            tty: false,
         };
 
         let mut state = ContainerState::running(
@@ -438,6 +444,7 @@ mod tests {
                 log_mode: "auto",
                 userns_mode: "host",
                 rootfs_mode: "direct",
+                tty: false,
             },
         )
         .expect("created state should be valid");
@@ -475,6 +482,7 @@ mod tests {
                 log_mode: "auto",
                 userns_mode: "host",
                 rootfs_mode: "direct",
+                tty: false,
             },
         )
         .expect("beta state should be valid");
@@ -487,6 +495,7 @@ mod tests {
                 log_mode: "auto",
                 userns_mode: "host",
                 rootfs_mode: "direct",
+                tty: false,
             },
         )
         .expect("alpha state should be valid");
@@ -526,6 +535,7 @@ mod tests {
             log_mode: "auto",
             userns_mode: "host",
             rootfs_mode: "direct",
+            tty: false,
         };
 
         let state = ContainerState::running(

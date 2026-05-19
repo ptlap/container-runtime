@@ -238,13 +238,30 @@ fn create_char_device(path: &str, major: u64, minor: u64, mode: u32) -> Result<(
         return Ok(());
     }
 
-    mknod(
-        Path::new(path),
+    let dev_path = Path::new(path);
+    if mknod(
+        dev_path,
         SFlag::S_IFCHR,
         Mode::from_bits_truncate(mode),
         makedev(major, minor),
     )
-    .with_context(|| format!("failed to create device node: {path}"))?;
+    .is_err()
+    {
+        let filename = dev_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("invalid device name")?;
+        let host_path = format!("/dev/{filename}");
+        fs::write(dev_path, "").context("failed to write dummy device file")?;
+        mount::<str, Path, str, str>(
+            Some(&host_path),
+            dev_path,
+            None,
+            MsFlags::MS_BIND,
+            None,
+        )
+        .with_context(|| format!("failed to bind mount host device {host_path} to {path}"))?;
+    }
 
     Ok(())
 }

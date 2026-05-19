@@ -30,6 +30,12 @@ const DEFAULT_STOP_TIMEOUT_SECS: u64 = 10;
 #[command(name = "crun")]
 #[command(about = "A minimal Linux container runtime written in Rust")]
 struct Cli {
+    #[arg(long, default_value = "info", global = true)]
+    log_level: String,
+
+    #[arg(long, default_value = "text", global = true)]
+    log_format: String,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -45,6 +51,8 @@ enum Command {
         log: CliLogMode,
         #[arg(long, value_enum, default_value_t = CliUsernsMode::Host)]
         userns: CliUsernsMode,
+        #[arg(short, long)]
+        tty: bool,
         id: String,
         bundle: PathBuf,
     },
@@ -57,6 +65,8 @@ enum Command {
         log: CliLogMode,
         #[arg(long, value_enum, default_value_t = CliUsernsMode::Host)]
         userns: CliUsernsMode,
+        #[arg(short, long)]
+        tty: bool,
         id: String,
         bundle: PathBuf,
     },
@@ -78,6 +88,8 @@ enum Command {
         json: bool,
     },
     Exec {
+        #[arg(short, long)]
+        tty: bool,
         id: String,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -191,12 +203,36 @@ struct RunOptions {
     security_profile: SecurityProfile,
     log_mode: LogMode,
     userns_mode: UserNamespaceMode,
+    tty: bool,
+}
+
+fn init_logging(log_level: &str, log_format: &str) -> Result<()> {
+    use tracing_subscriber::filter::EnvFilter;
+
+    let filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(log_level))
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    if log_format.eq_ignore_ascii_case("json") {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .json()
+            .try_init()
+            .map_err(|e| anyhow::anyhow!("failed to initialize json logger: {e}"))?;
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .try_init()
+            .map_err(|e| anyhow::anyhow!("failed to initialize text logger: {e}"))?;
+    }
+    Ok(())
 }
 
 fn main() -> Result<()> {
     ensure_reexecuted_from_memfd()?;
 
     let cli = Cli::parse();
+    init_logging(&cli.log_level, &cli.log_format)?;
 
     match cli.command {
         Command::Run {
@@ -204,6 +240,7 @@ fn main() -> Result<()> {
             security,
             log,
             userns,
+            tty,
             id,
             bundle,
         } => run_container(RunOptions {
@@ -213,12 +250,14 @@ fn main() -> Result<()> {
             security_profile: security.into(),
             log_mode: log.into(),
             userns_mode: userns_mode_from_cli(userns)?,
+            tty,
         })?,
         Command::Create {
             net,
             security,
             log,
             userns,
+            tty,
             id,
             bundle,
         } => create_container(RunOptions {
@@ -228,12 +267,13 @@ fn main() -> Result<()> {
             security_profile: security.into(),
             log_mode: log.into(),
             userns_mode: userns_mode_from_cli(userns)?,
+            tty,
         })?,
         Command::Start { id } => start_container(&id)?,
         Command::State { id, json } => show_state(&id, json)?,
         Command::Stats { id, json } => show_stats(&id, json)?,
         Command::Ps { json } => list_containers(json)?,
-        Command::Exec { id, args } => exec_container(&id, &args)?,
+        Command::Exec { tty, id, args } => exec_container(&id, &args, tty)?,
         Command::Logs { id, follow } => show_logs(&id, follow)?,
         Command::Kill { id, signal } => kill_container(&id, &signal)?,
         Command::Stop { id, timeout } => stop_container(&id, timeout)?,
@@ -288,6 +328,7 @@ fn create_container(options: RunOptions) -> Result<()> {
             log_mode: options.log_mode.as_str(),
             userns_mode: options.userns_mode.as_str(),
             rootfs_mode,
+            tty: options.tty,
         },
     )?;
     state::save(&state)?;
@@ -309,6 +350,7 @@ fn start_container(id: &str) -> Result<()> {
         security_profile: parse_security_profile(&state.security_profile)?,
         log_mode: parse_log_mode(&state.log_mode)?,
         userns_mode: parse_userns_mode(&state.userns_mode)?,
+        tty: state.tty,
     };
 
     execute_container(options, Some(state))
@@ -375,7 +417,7 @@ fn execute_container(
     });
 
     let log_path = state::log_path(&id)?;
-    let capture_logs = should_capture_logs(log_mode);
+    let capture_logs = !options.tty && should_capture_logs(log_mode);
     let mut running_state = None;
     let mut save_started_state = |started: container_runtime::container::StartedProcess| {
         let cgroup_path = started
@@ -404,6 +446,7 @@ fn execute_container(
                     log_mode: log_mode.as_str(),
                     userns_mode: userns_mode.as_str(),
                     rootfs_mode,
+                    tty: options.tty,
                 },
             )?
         };
@@ -428,6 +471,7 @@ fn execute_container(
         network_mode,
         security_profile,
         userns_mode,
+        tty: options.tty,
     };
 
     let process_exit = run_process(process_config, &mut save_started_state)?;
@@ -688,7 +732,7 @@ fn list_containers(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn exec_container(id: &str, args: &[String]) -> Result<()> {
+fn exec_container(id: &str, args: &[String], tty: bool) -> Result<()> {
     let state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
         bail!("container {id} is not running");
@@ -706,6 +750,7 @@ fn exec_container(id: &str, args: &[String]) -> Result<()> {
         env: &config.process.env,
         cwd: config.process.cwd.as_deref(),
         cgroup_path: state.cgroup_path.as_deref(),
+        tty,
     })?;
 
     let exit_code = exit.code;

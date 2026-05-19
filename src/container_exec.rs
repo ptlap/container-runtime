@@ -1,12 +1,16 @@
+use crate::container::pty::{PtyManager, RawTerminalGuard, proxy_pty, register_sigwinch, unregister_sigwinch};
 use anyhow::{bail, Context, Result};
+use libc;
 use nix::sched::{setns, CloneFlags};
 use nix::sys::wait::{waitpid, WaitStatus};
-use nix::unistd::{chdir, execvp, fork, ForkResult, Pid};
+use nix::unistd::{chdir, execvp, fork, setsid, ForkResult, Pid};
 use std::ffi::CString;
 use std::fs::{self, File};
+use std::os::fd::AsRawFd;
 use std::path::Path;
 
-const NAMESPACES: [(&str, CloneFlags); 5] = [
+const NAMESPACES: [(&str, CloneFlags); 6] = [
+    ("user", CloneFlags::CLONE_NEWUSER),
     ("mnt", CloneFlags::CLONE_NEWNS),
     ("uts", CloneFlags::CLONE_NEWUTS),
     ("ipc", CloneFlags::CLONE_NEWIPC),
@@ -21,6 +25,7 @@ pub struct ExecConfig<'a> {
     pub env: &'a [String],
     pub cwd: Option<&'a str>,
     pub cgroup_path: Option<&'a str>,
+    pub tty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -34,9 +39,32 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
         bail!("exec args is empty");
     }
 
+    let pty_manager = if config.tty {
+        Some(PtyManager::new().context("failed to allocate pty for exec")?)
+    } else {
+        None
+    };
+
+    let mut _raw_guard = None;
+    if let Some(pty) = pty_manager.as_ref() {
+        _raw_guard = Some(RawTerminalGuard::new().context("failed to set raw terminal mode")?);
+        register_sigwinch(pty.master.as_raw_fd());
+    }
+
+    let mut proxy_handles = None;
+    if let Some(pty) = pty_manager.as_ref() {
+        let master_clone = pty.master.try_clone().context("failed to clone master fd")?;
+        proxy_handles = Some(proxy_pty(master_clone));
+    }
+
     match unsafe { fork() }.context("failed to fork exec namespace helper")? {
         ForkResult::Child => {
-            if let Err(error) = run_namespace_helper(config) {
+            if let Some(pty) = pty_manager.as_ref() {
+                // Drop master in child helper
+                drop(pty.master.try_clone());
+            }
+
+            if let Err(error) = run_namespace_helper(config, pty_manager) {
                 eprintln!("exec error: {error}");
                 std::process::exit(1);
             }
@@ -50,16 +78,42 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
                 }
             }
 
-            wait_for_exec_child(child)
+            let exit = wait_for_exec_child(child);
+
+            if config.tty {
+                unregister_sigwinch();
+                drop(proxy_handles);
+                drop(_raw_guard);
+            }
+
+            exit
         }
     }
 }
 
-fn run_namespace_helper(config: ExecConfig<'_>) -> Result<()> {
+fn run_namespace_helper(config: ExecConfig<'_>, pty_manager: Option<PtyManager>) -> Result<()> {
     join_namespaces(config.target_pid)?;
 
     match unsafe { fork() }.context("failed to fork exec process")? {
         ForkResult::Child => {
+            if let Some(pty) = pty_manager.as_ref() {
+                let slave_fd = pty.slave.as_raw_fd();
+                setsid().context("failed to setsid for exec process")?;
+                unsafe {
+                    if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) == -1 {
+                        return Err(anyhow::anyhow!("failed to set controlling terminal"));
+                    }
+                    if libc::dup2(slave_fd, 0) == -1 {
+                        return Err(anyhow::anyhow!("failed to dup slave to stdin"));
+                    }
+                    if libc::dup2(slave_fd, 1) == -1 {
+                        return Err(anyhow::anyhow!("failed to dup slave to stdout"));
+                    }
+                    if libc::dup2(slave_fd, 2) == -1 {
+                        return Err(anyhow::anyhow!("failed to dup slave to stderr"));
+                    }
+                }
+            }
             exec_command(config.args, config.env, config.cwd)?;
             unreachable!();
         }
@@ -77,9 +131,24 @@ fn run_namespace_helper(config: ExecConfig<'_>) -> Result<()> {
     }
 }
 
+fn is_same_namespace(ns_name: &str, target_pid: i32) -> bool {
+    let self_path = format!("/proc/self/ns/{ns_name}");
+    let target_path = format!("/proc/{target_pid}/ns/{ns_name}");
+
+    if let (Ok(self_meta), Ok(target_meta)) = (fs::metadata(&self_path), fs::metadata(&target_path)) {
+        use std::os::unix::fs::MetadataExt;
+        self_meta.ino() == target_meta.ino()
+    } else {
+        false
+    }
+}
+
 fn join_namespaces(target_pid: i32) -> Result<()> {
     let mut namespace_files = Vec::new();
     for (namespace, flag) in NAMESPACES {
+        if namespace == "user" && is_same_namespace("user", target_pid) {
+            continue;
+        }
         let path = format!("/proc/{target_pid}/ns/{namespace}");
         let file =
             File::open(&path).with_context(|| format!("failed to open namespace: {path}"))?;
@@ -114,16 +183,6 @@ fn exec_command(args: &[String], env: &[String], cwd: Option<&str>) -> Result<()
     unreachable!();
 }
 
-fn add_to_cgroup(cgroup_path: &str, pid: Pid) -> Result<()> {
-    let procs_path = Path::new(cgroup_path).join("cgroup.procs");
-    fs::write(&procs_path, pid.as_raw().to_string()).with_context(|| {
-        format!(
-            "failed to add exec process to cgroup: {}",
-            procs_path.display()
-        )
-    })
-}
-
 fn wait_for_exec_child(pid: Pid) -> Result<ExecExit> {
     let status = waitpid(pid, None).context("failed to wait for exec process")?;
 
@@ -143,4 +202,13 @@ fn wait_for_exec_child(pid: Pid) -> Result<ExecExit> {
     };
 
     Ok(exit)
+}
+
+pub fn add_to_cgroup(cgroup_path: &str, pid: Pid) -> Result<()> {
+    let path = Path::new(cgroup_path);
+    if path.exists() {
+        fs::write(path.join("cgroup.procs"), pid.as_raw().to_string())
+            .context("failed to add exec helper to cgroup")?;
+    }
+    Ok(())
 }

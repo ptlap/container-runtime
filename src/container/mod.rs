@@ -12,12 +12,15 @@ use nix::libc;
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::wait::{waitpid, WaitStatus};
-use nix::unistd::{chdir, close, execvp, fork, pipe, read, write, ForkResult};
+use nix::unistd::{chdir, close, execvp, fork, pipe, read, setsid, write, ForkResult};
 use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
+use tracing::{warn, error};
+
+pub mod pty;
 
 #[derive(Debug, Clone)]
 pub struct ProcessExit {
@@ -43,6 +46,7 @@ pub struct ProcessConfig<'a> {
     pub network_mode: NetworkMode,
     pub security_profile: SecurityProfile,
     pub userns_mode: UserNamespaceMode,
+    pub tty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -89,8 +93,8 @@ impl ParentResources {
             cleanup_nat(&network.subnet)
                 .with_context(|| format!("failed to cleanup NAT for {}", network.subnet))?;
             if let Err(error) = cleanup_veth_host(&network.veth.host_name) {
-                eprintln!(
-                    "warn: failed to cleanup veth {}: {error}",
+                warn!(
+                    "failed to cleanup veth {}: {error}",
                     network.veth.host_name
                 );
             }
@@ -112,7 +116,7 @@ impl ParentResources {
 
     fn cleanup_with_warnings(&mut self) {
         if let Err(error) = self.cleanup() {
-            eprintln!("warn: parent resource cleanup failed: {error}");
+            warn!("parent resource cleanup failed: {error}");
         }
     }
 }
@@ -129,6 +133,13 @@ pub fn run_process(
 ) -> Result<ProcessExit> {
     if config.args.is_empty() {
         bail!("process args is empty");
+    }
+
+    let is_root = nix::unistd::getuid().is_root();
+    let mut network_mode = config.network_mode;
+    if !is_root && network_mode == NetworkMode::Bridge {
+        warn!("bridge networking is not supported in rootless mode, falling back to none");
+        network_mode = NetworkMode::None;
     }
 
     let (read_fd, write_fd) = pipe().context("failed to create sync pipe")?;
@@ -163,13 +174,49 @@ pub fn run_process(
         unshare(parent_flags).context("failed to unshare parent namespaces")?;
     }
 
+    let pty_manager = if config.tty {
+        Some(pty::PtyManager::new().context("failed to allocate pty")?)
+    } else {
+        None
+    };
+
+    let mut _raw_guard = None;
+    if let Some(pty) = pty_manager.as_ref() {
+        _raw_guard = Some(pty::RawTerminalGuard::new().context("failed to set raw terminal mode")?);
+        pty::register_sigwinch(pty.master.as_raw_fd());
+    }
+
+    let mut proxy_handles = None;
+    if let Some(pty) = pty_manager.as_ref() {
+        let master_clone = pty.master.try_clone().context("failed to clone master fd")?;
+        proxy_handles = Some(pty::proxy_pty(master_clone));
+    }
+
     let process_exit = match unsafe { fork() }.context("failed to fork process")? {
         ForkResult::Child => {
             close(write_fd).ok();
             close(error_read_fd).ok();
             close(userns_ready_read_fd).ok();
             close(userns_mapped_write_fd).ok();
-            if let Some(log_write_fd) = log_write_fd.take() {
+
+            if let Some(pty) = pty_manager.as_ref() {
+                let slave_fd = pty.slave.as_raw_fd();
+                setsid().context("failed to setsid for container process")?;
+                unsafe {
+                    if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) == -1 {
+                        return Err(anyhow::anyhow!("failed to set controlling terminal"));
+                    }
+                    if libc::dup2(slave_fd, 0) == -1 {
+                        return Err(anyhow::anyhow!("failed to dup slave to stdin"));
+                    }
+                    if libc::dup2(slave_fd, 1) == -1 {
+                        return Err(anyhow::anyhow!("failed to dup slave to stdout"));
+                    }
+                    if libc::dup2(slave_fd, 2) == -1 {
+                        return Err(anyhow::anyhow!("failed to dup slave to stderr"));
+                    }
+                }
+            } else if let Some(log_write_fd) = log_write_fd.take() {
                 redirect_stdio_to_log(&log_write_fd)?;
                 close(log_write_fd).ok();
             }
@@ -183,7 +230,7 @@ pub fn run_process(
                 overlay_config: config.overlay_config,
                 readonly_rootfs: config.readonly_rootfs,
                 mounts: config.mounts,
-                network_mode: config.network_mode,
+                network_mode,
                 security_profile: config.security_profile,
                 userns_mode: config.userns_mode,
                 child_flags,
@@ -195,7 +242,7 @@ pub fn run_process(
                 userns_ready_write_fd,
                 userns_mapped_read_fd,
             ) {
-                eprintln!("container error: {error}");
+                error!("container error: {error}");
                 write_child_error(&error_write_fd, &error).ok();
                 close(error_write_fd).ok();
                 std::process::exit(1);
@@ -225,7 +272,7 @@ pub fn run_process(
                     .add_process(child)?;
             }
 
-            if config.network_mode == NetworkMode::Bridge {
+            if network_mode == NetworkMode::Bridge {
                 let network = allocate_bridge_network(config.id, child_pid)?;
                 resources.bridge_network = Some(network);
                 resources.release_bridge_allocation = true;
@@ -272,6 +319,11 @@ pub fn run_process(
             close(userns_mapped_write_fd).ok();
 
             let status = waitpid(child, None).context("failed to wait for child process")?;
+            if config.tty {
+                pty::unregister_sigwinch();
+                drop(proxy_handles);
+                drop(_raw_guard);
+            }
             let child_error = read_child_error(error_read_fd)?;
             wait_for_log_helper(log_helper)?;
 
@@ -363,7 +415,7 @@ fn start_log_helper(
             }
             close(write_fd).ok();
             if let Err(error) = pump_logs(read_fd, path) {
-                eprintln!("log helper error: {error}");
+                error!("log helper error: {error}");
                 std::process::exit(1);
             }
             std::process::exit(0);
@@ -453,6 +505,14 @@ fn run_child(
     userns_ready_write_fd: OwnedFd,
     userns_mapped_read_fd: OwnedFd,
 ) -> Result<()> {
+    if config.userns_mode.is_private() {
+        unshare(CloneFlags::CLONE_NEWUSER).context("failed to unshare user namespace")?;
+        notify_userns_ready(&userns_ready_write_fd)?;
+        wait_for_userns_mapped(&userns_mapped_read_fd)?;
+    }
+    close(userns_ready_write_fd).ok();
+    close(userns_mapped_read_fd).ok();
+
     if !config.child_flags.is_empty() {
         unshare(config.child_flags).context("failed to unshare child namespaces")?;
     }
@@ -496,14 +556,6 @@ fn run_child(
     if let Some(cwd) = config.cwd {
         chdir(cwd).with_context(|| format!("failed to chdir to process cwd: {cwd}"))?;
     }
-
-    if config.userns_mode.is_private() {
-        unshare(CloneFlags::CLONE_NEWUSER).context("failed to unshare user namespace")?;
-        notify_userns_ready(&userns_ready_write_fd)?;
-        wait_for_userns_mapped(&userns_mapped_read_fd)?;
-    }
-    close(userns_ready_write_fd).ok();
-    close(userns_mapped_read_fd).ok();
 
     security::apply(config.security_profile)?;
 

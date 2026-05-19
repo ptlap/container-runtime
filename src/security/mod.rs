@@ -7,6 +7,16 @@ use serde::{Deserialize, Serialize};
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const CAPABILITY_U32S: usize = 2;
 const SECCOMP_DATA_NR_OFFSET: u32 = 0;
+const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
+
+#[cfg(target_arch = "x86_64")]
+const AUDIT_ARCH_LOCAL: u32 = 0xc000003e;
+
+#[cfg(target_arch = "aarch64")]
+const AUDIT_ARCH_LOCAL: u32 = 0xc00000b7;
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const AUDIT_ARCH_LOCAL: u32 = 0;
 
 #[repr(C)]
 struct CapUserHeader {
@@ -103,6 +113,24 @@ fn install_seccomp_filter() -> Result<()> {
 
 fn seccomp_denylist_filter() -> Vec<libc::sock_filter> {
     let mut filter = Vec::new();
+
+    // 1. Kiểm tra kiến trúc
+    filter.push(bpf_stmt(
+        libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
+        SECCOMP_DATA_ARCH_OFFSET,
+    ));
+    filter.push(bpf_jump(
+        libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+        AUDIT_ARCH_LOCAL,
+        1,
+        0,
+    ));
+    filter.push(bpf_stmt(
+        libc::BPF_RET | libc::BPF_K,
+        libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
+    ));
+
+    // 2. Load số hiệu syscall
     filter.push(bpf_stmt(
         libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
         SECCOMP_DATA_NR_OFFSET,
@@ -193,7 +221,7 @@ mod tests {
 
         assert_eq!(
             filter.first().map(|item| item.k),
-            Some(SECCOMP_DATA_NR_OFFSET)
+            Some(SECCOMP_DATA_ARCH_OFFSET)
         );
         assert_eq!(
             filter.last().map(|item| item.k),
