@@ -703,6 +703,39 @@ fn show_stats(id: &str, json: bool) -> Result<()> {
         if let Some(value) = stats.pids_max {
             println!("pids_max: {value}");
         }
+        if let Some(value) = stats.cpu.nr_periods {
+            println!("cpu_nr_periods: {value}");
+        }
+        if let Some(value) = stats.cpu.nr_throttled {
+            println!("cpu_nr_throttled: {value}");
+        }
+        if let Some(value) = stats.cpu.throttled_usec {
+            println!("cpu_throttled_usec: {value}");
+        }
+        for (event, value) in &stats.memory.events {
+            println!("memory_event_{event}: {value}");
+        }
+        for (event, value) in &stats.pids.events {
+            println!("pids_event_{event}: {value}");
+        }
+        if let Some(value) = stats.memory.pressure.as_deref() {
+            println!("memory_pressure: {value}");
+        }
+        if let Some(value) = stats.cpu.pressure.as_deref() {
+            println!("cpu_pressure: {value}");
+        }
+        for device in &stats.io {
+            println!(
+                "io_device {}: rbytes={} wbytes={} rios={} wios={} dbytes={} dios={}",
+                device.device,
+                device.rbytes.unwrap_or(0),
+                device.wbytes.unwrap_or(0),
+                device.rios.unwrap_or(0),
+                device.wios.unwrap_or(0),
+                device.dbytes.unwrap_or(0),
+                device.dios.unwrap_or(0)
+            );
+        }
     }
 
     Ok(())
