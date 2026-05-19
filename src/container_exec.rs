@@ -1,4 +1,6 @@
-use crate::container::pty::{PtyManager, RawTerminalGuard, proxy_pty, register_sigwinch, unregister_sigwinch};
+use crate::container::pty::{
+    proxy_pty, register_sigwinch, unregister_sigwinch, PtyManager, RawTerminalGuard,
+};
 use anyhow::{bail, Context, Result};
 use libc;
 use nix::sched::{setns, CloneFlags};
@@ -39,7 +41,7 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
         bail!("exec args is empty");
     }
 
-    let pty_manager = if config.tty {
+    let mut pty_manager = if config.tty {
         Some(PtyManager::new().context("failed to allocate pty for exec")?)
     } else {
         None
@@ -53,8 +55,16 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
 
     let mut proxy_handles = None;
     if let Some(pty) = pty_manager.as_ref() {
-        let master_clone = pty.master.try_clone().context("failed to clone master fd")?;
-        proxy_handles = Some(proxy_pty(master_clone));
+        let master_clone = pty
+            .master
+            .try_clone()
+            .context("failed to clone master fd")?;
+        let mut inherited_fds = Vec::new();
+        if let Some(slave_fd) = pty.slave_ref() {
+            inherited_fds.push(slave_fd);
+        }
+        proxy_handles =
+            Some(proxy_pty(master_clone, &inherited_fds).context("failed to start pty proxy")?);
     }
 
     match unsafe { fork() }.context("failed to fork exec namespace helper")? {
@@ -72,6 +82,10 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
             unreachable!();
         }
         ForkResult::Parent { child } => {
+            if let Some(pty) = pty_manager.as_mut() {
+                pty.close_slave();
+            }
+
             if let Some(cgroup_path) = config.cgroup_path {
                 if let Err(error) = add_to_cgroup(cgroup_path, child) {
                     eprintln!("warn: could not add exec helper to container cgroup: {error}");
@@ -82,7 +96,9 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
 
             if config.tty {
                 unregister_sigwinch();
-                drop(proxy_handles);
+                if let Some(proxy) = proxy_handles.take() {
+                    proxy.join();
+                }
                 drop(_raw_guard);
             }
 
@@ -97,7 +113,7 @@ fn run_namespace_helper(config: ExecConfig<'_>, pty_manager: Option<PtyManager>)
     match unsafe { fork() }.context("failed to fork exec process")? {
         ForkResult::Child => {
             if let Some(pty) = pty_manager.as_ref() {
-                let slave_fd = pty.slave.as_raw_fd();
+                let slave_fd = pty.slave_fd().context("pty slave is closed")?;
                 setsid().context("failed to setsid for exec process")?;
                 unsafe {
                     if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) == -1 {
@@ -135,7 +151,8 @@ fn is_same_namespace(ns_name: &str, target_pid: i32) -> bool {
     let self_path = format!("/proc/self/ns/{ns_name}");
     let target_path = format!("/proc/{target_pid}/ns/{ns_name}");
 
-    if let (Ok(self_meta), Ok(target_meta)) = (fs::metadata(&self_path), fs::metadata(&target_path)) {
+    if let (Ok(self_meta), Ok(target_meta)) = (fs::metadata(&self_path), fs::metadata(&target_path))
+    {
         use std::os::unix::fs::MetadataExt;
         self_meta.ino() == target_meta.ino()
     } else {

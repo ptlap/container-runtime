@@ -31,6 +31,15 @@ impl NetworkMode {
             Self::Bridge => "bridge",
         }
     }
+
+    pub fn to_effective(self) -> Self {
+        let is_root = nix::unistd::getuid().is_root();
+        if !is_root && self == Self::Bridge {
+            Self::None
+        } else {
+            self
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

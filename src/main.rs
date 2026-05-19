@@ -362,7 +362,12 @@ fn execute_container(
 ) -> Result<()> {
     let id = options.id;
     let bundle = options.bundle;
-    let network_mode = options.network_mode;
+    let network_mode = options.network_mode.to_effective();
+    if network_mode != options.network_mode {
+        eprintln!(
+            "warn: bridge networking is not supported in rootless mode, falling back to none"
+        );
+    }
     let security_profile = options.security_profile;
     let log_mode = options.log_mode;
     let userns_mode = options.userns_mode;

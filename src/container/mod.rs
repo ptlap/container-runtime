@@ -18,7 +18,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use tracing::{warn, error};
+use tracing::{error, warn};
 
 pub mod pty;
 
@@ -69,6 +69,7 @@ struct ChildConfig<'a> {
     security_profile: SecurityProfile,
     userns_mode: UserNamespaceMode,
     child_flags: CloneFlags,
+    is_rootless: bool,
 }
 
 struct ParentResources {
@@ -93,10 +94,7 @@ impl ParentResources {
             cleanup_nat(&network.subnet)
                 .with_context(|| format!("failed to cleanup NAT for {}", network.subnet))?;
             if let Err(error) = cleanup_veth_host(&network.veth.host_name) {
-                warn!(
-                    "failed to cleanup veth {}: {error}",
-                    network.veth.host_name
-                );
+                warn!("failed to cleanup veth {}: {error}", network.veth.host_name);
             }
         }
 
@@ -135,11 +133,9 @@ pub fn run_process(
         bail!("process args is empty");
     }
 
-    let is_root = nix::unistd::getuid().is_root();
-    let mut network_mode = config.network_mode;
-    if !is_root && network_mode == NetworkMode::Bridge {
+    let network_mode = config.network_mode.to_effective();
+    if network_mode != config.network_mode {
         warn!("bridge networking is not supported in rootless mode, falling back to none");
-        network_mode = NetworkMode::None;
     }
 
     let (read_fd, write_fd) = pipe().context("failed to create sync pipe")?;
@@ -174,7 +170,7 @@ pub fn run_process(
         unshare(parent_flags).context("failed to unshare parent namespaces")?;
     }
 
-    let pty_manager = if config.tty {
+    let mut pty_manager = if config.tty {
         Some(pty::PtyManager::new().context("failed to allocate pty")?)
     } else {
         None
@@ -188,8 +184,26 @@ pub fn run_process(
 
     let mut proxy_handles = None;
     if let Some(pty) = pty_manager.as_ref() {
-        let master_clone = pty.master.try_clone().context("failed to clone master fd")?;
-        proxy_handles = Some(pty::proxy_pty(master_clone));
+        let master_clone = pty
+            .master
+            .try_clone()
+            .context("failed to clone master fd")?;
+        let mut inherited_fds = vec![
+            &read_fd,
+            &write_fd,
+            &error_read_fd,
+            &error_write_fd,
+            &userns_ready_read_fd,
+            &userns_ready_write_fd,
+            &userns_mapped_read_fd,
+            &userns_mapped_write_fd,
+        ];
+        if let Some(slave_fd) = pty.slave_ref() {
+            inherited_fds.push(slave_fd);
+        }
+        proxy_handles = Some(
+            pty::proxy_pty(master_clone, &inherited_fds).context("failed to start pty proxy")?,
+        );
     }
 
     let process_exit = match unsafe { fork() }.context("failed to fork process")? {
@@ -200,7 +214,7 @@ pub fn run_process(
             close(userns_mapped_write_fd).ok();
 
             if let Some(pty) = pty_manager.as_ref() {
-                let slave_fd = pty.slave.as_raw_fd();
+                let slave_fd = pty.slave_fd().context("pty slave is closed")?;
                 setsid().context("failed to setsid for container process")?;
                 unsafe {
                     if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) == -1 {
@@ -221,6 +235,7 @@ pub fn run_process(
                 close(log_write_fd).ok();
             }
 
+            let is_root = nix::unistd::getuid().is_root();
             let child_config = ChildConfig {
                 args: config.args,
                 env: config.env,
@@ -234,6 +249,7 @@ pub fn run_process(
                 security_profile: config.security_profile,
                 userns_mode: config.userns_mode,
                 child_flags,
+                is_rootless: !is_root,
             };
 
             if let Err(error) = run_child(
@@ -258,6 +274,9 @@ pub fn run_process(
             close(userns_mapped_read_fd).ok();
             if let Some(log_write_fd) = log_write_fd.take() {
                 close(log_write_fd).ok();
+            }
+            if let Some(pty) = pty_manager.as_mut() {
+                pty.close_slave();
             }
             let child_pid = child.as_raw();
             let mut resources = ParentResources::new(config.id);
@@ -321,7 +340,9 @@ pub fn run_process(
             let status = waitpid(child, None).context("failed to wait for child process")?;
             if config.tty {
                 pty::unregister_sigwinch();
-                drop(proxy_handles);
+                if let Some(proxy) = proxy_handles.take() {
+                    proxy.join();
+                }
                 drop(_raw_guard);
             }
             let child_error = read_child_error(error_read_fd)?;
@@ -505,13 +526,11 @@ fn run_child(
     userns_ready_write_fd: OwnedFd,
     userns_mapped_read_fd: OwnedFd,
 ) -> Result<()> {
-    if config.userns_mode.is_private() {
+    if config.is_rootless && config.userns_mode.is_private() {
         unshare(CloneFlags::CLONE_NEWUSER).context("failed to unshare user namespace")?;
         notify_userns_ready(&userns_ready_write_fd)?;
         wait_for_userns_mapped(&userns_mapped_read_fd)?;
     }
-    close(userns_ready_write_fd).ok();
-    close(userns_mapped_read_fd).ok();
 
     if !config.child_flags.is_empty() {
         unshare(config.child_flags).context("failed to unshare child namespaces")?;
@@ -556,6 +575,15 @@ fn run_child(
     if let Some(cwd) = config.cwd {
         chdir(cwd).with_context(|| format!("failed to chdir to process cwd: {cwd}"))?;
     }
+
+    if !config.is_rootless && config.userns_mode.is_private() {
+        unshare(CloneFlags::CLONE_NEWUSER).context("failed to unshare user namespace")?;
+        notify_userns_ready(&userns_ready_write_fd)?;
+        wait_for_userns_mapped(&userns_mapped_read_fd)?;
+    }
+
+    close(userns_ready_write_fd).ok();
+    close(userns_mapped_read_fd).ok();
 
     security::apply(config.security_profile)?;
 

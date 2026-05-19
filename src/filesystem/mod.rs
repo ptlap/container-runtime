@@ -253,14 +253,8 @@ fn create_char_device(path: &str, major: u64, minor: u64, mode: u32) -> Result<(
             .context("invalid device name")?;
         let host_path = format!("/dev/{filename}");
         fs::write(dev_path, "").context("failed to write dummy device file")?;
-        mount::<str, Path, str, str>(
-            Some(&host_path),
-            dev_path,
-            None,
-            MsFlags::MS_BIND,
-            None,
-        )
-        .with_context(|| format!("failed to bind mount host device {host_path} to {path}"))?;
+        mount::<str, Path, str, str>(Some(&host_path), dev_path, None, MsFlags::MS_BIND, None)
+            .with_context(|| format!("failed to bind mount host device {host_path} to {path}"))?;
     }
 
     Ok(())

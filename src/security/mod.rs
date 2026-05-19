@@ -112,29 +112,28 @@ fn install_seccomp_filter() -> Result<()> {
 }
 
 fn seccomp_denylist_filter() -> Vec<libc::sock_filter> {
-    let mut filter = Vec::new();
-
-    // 1. Kiểm tra kiến trúc
-    filter.push(bpf_stmt(
-        libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
-        SECCOMP_DATA_ARCH_OFFSET,
-    ));
-    filter.push(bpf_jump(
-        libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
-        AUDIT_ARCH_LOCAL,
-        1,
-        0,
-    ));
-    filter.push(bpf_stmt(
-        libc::BPF_RET | libc::BPF_K,
-        libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
-    ));
-
-    // 2. Load số hiệu syscall
-    filter.push(bpf_stmt(
-        libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
-        SECCOMP_DATA_NR_OFFSET,
-    ));
+    let mut filter = vec![
+        // 1. Kiểm tra kiến trúc
+        bpf_stmt(
+            libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
+            SECCOMP_DATA_ARCH_OFFSET,
+        ),
+        bpf_jump(
+            libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
+            AUDIT_ARCH_LOCAL,
+            1,
+            0,
+        ),
+        bpf_stmt(
+            libc::BPF_RET | libc::BPF_K,
+            libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
+        ),
+        // 2. Load số hiệu syscall
+        bpf_stmt(
+            libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
+            SECCOMP_DATA_NR_OFFSET,
+        ),
+    ];
 
     for syscall in denied_syscalls() {
         filter.push(bpf_jump(
