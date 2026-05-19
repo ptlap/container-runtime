@@ -90,6 +90,10 @@ enum Command {
         id: String,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        snapshot: bool,
+        #[arg(long)]
+        once: bool,
         #[arg(long, default_value_t = DEFAULT_EVENTS_INTERVAL_MS)]
         interval_ms: u64,
     },
@@ -285,8 +289,10 @@ fn main() -> Result<()> {
         Command::Events {
             id,
             json,
+            snapshot,
+            once,
             interval_ms,
-        } => stream_events(&id, json, interval_ms)?,
+        } => stream_events(&id, json, snapshot, once, interval_ms)?,
         Command::Ps { json } => list_containers(json)?,
         Command::Exec { tty, id, args } => exec_container(&id, &args, tty)?,
         Command::Logs { id, follow } => show_logs(&id, follow)?,
@@ -764,10 +770,11 @@ struct RuntimeEvent {
     name: String,
     value: Option<u64>,
     delta: Option<u64>,
+    fields: Option<BTreeMap<String, u64>>,
     status: Option<String>,
 }
 
-fn stream_events(id: &str, json: bool, interval_ms: u64) -> Result<()> {
+fn stream_events(id: &str, json: bool, snapshot: bool, once: bool, interval_ms: u64) -> Result<()> {
     if interval_ms == 0 {
         bail!("events interval must be greater than zero");
     }
@@ -786,6 +793,13 @@ fn stream_events(id: &str, json: bool, interval_ms: u64) -> Result<()> {
     }
 
     let mut previous = EventSnapshot::from_stats(&read_stats(&cgroup_path)?);
+    if snapshot {
+        print_event(snapshot_event(id, &previous), json)?;
+    }
+    if once {
+        return Ok(());
+    }
+
     let interval = Duration::from_millis(interval_ms);
 
     loop {
@@ -801,6 +815,7 @@ fn stream_events(id: &str, json: bool, interval_ms: u64) -> Result<()> {
                     name: "stopped".to_string(),
                     value: None,
                     delta: None,
+                    fields: None,
                     status: Some(container_status_name(&state.status).to_string()),
                 },
                 json,
@@ -835,6 +850,37 @@ impl EventSnapshot {
             cpu_nr_throttled: stats.cpu.nr_throttled,
             cpu_throttled_usec: stats.cpu.throttled_usec,
         }
+    }
+
+    fn fields(&self) -> BTreeMap<String, u64> {
+        let mut fields = BTreeMap::new();
+        for (name, value) in &self.memory_events {
+            fields.insert(format!("memory.{name}"), *value);
+        }
+        for (name, value) in &self.pids_events {
+            fields.insert(format!("pids.{name}"), *value);
+        }
+        if let Some(value) = self.cpu_nr_throttled {
+            fields.insert("cpu.nr_throttled".to_string(), value);
+        }
+        if let Some(value) = self.cpu_throttled_usec {
+            fields.insert("cpu.throttled_usec".to_string(), value);
+        }
+
+        fields
+    }
+}
+
+fn snapshot_event(id: &str, snapshot: &EventSnapshot) -> RuntimeEvent {
+    RuntimeEvent {
+        timestamp_unix: unix_timestamp(),
+        id: id.to_string(),
+        source: "cgroup".to_string(),
+        name: "snapshot".to_string(),
+        value: None,
+        delta: None,
+        fields: Some(snapshot.fields()),
+        status: None,
     }
 }
 
@@ -917,6 +963,7 @@ fn counter_event(id: &str, source: &str, name: &str, value: u64, delta: u64) -> 
         name: name.to_string(),
         value: Some(value),
         delta: Some(delta),
+        fields: None,
         status: None,
     }
 }
@@ -928,6 +975,16 @@ fn print_event(event: RuntimeEvent, json: bool) -> Result<()> {
         println!(
             "{} {} {} status={}",
             event.timestamp_unix, event.source, event.name, status
+        );
+    } else if let Some(fields) = event.fields.as_ref() {
+        let fields = fields
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!(
+            "{} {} {} {}",
+            event.timestamp_unix, event.source, event.name, fields
         );
     } else {
         println!(
@@ -1213,5 +1270,25 @@ mod tests {
         };
 
         assert!(collect_counter_events("demo", &previous, &current).is_empty());
+    }
+
+    #[test]
+    fn builds_snapshot_event_fields() {
+        let snapshot = EventSnapshot {
+            memory_events: BTreeMap::from([("oom_kill".to_string(), 2)]),
+            pids_events: BTreeMap::from([("max".to_string(), 1)]),
+            cpu_nr_throttled: Some(3),
+            cpu_throttled_usec: Some(40),
+        };
+
+        let event = snapshot_event("demo", &snapshot);
+        let fields = event.fields.expect("snapshot should include fields");
+
+        assert_eq!(event.source, "cgroup");
+        assert_eq!(event.name, "snapshot");
+        assert_eq!(fields.get("memory.oom_kill"), Some(&2));
+        assert_eq!(fields.get("pids.max"), Some(&1));
+        assert_eq!(fields.get("cpu.nr_throttled"), Some(&3));
+        assert_eq!(fields.get("cpu.throttled_usec"), Some(&40));
     }
 }
