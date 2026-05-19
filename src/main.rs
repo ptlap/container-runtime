@@ -11,7 +11,7 @@ use container_runtime::selfexec::{
     current_exe_link, ensure_reexecuted_from_memfd, is_running_from_memfd,
 };
 use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
-use container_runtime::spec::config::load_config;
+use container_runtime::spec::config::{load_config, Healthcheck};
 use container_runtime::state::{
     self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources,
 };
@@ -96,6 +96,11 @@ enum Command {
         once: bool,
         #[arg(long, default_value_t = DEFAULT_EVENTS_INTERVAL_MS)]
         interval_ms: u64,
+    },
+    Health {
+        id: String,
+        #[arg(long)]
+        json: bool,
     },
     Ps {
         #[arg(long)]
@@ -293,6 +298,7 @@ fn main() -> Result<()> {
             once,
             interval_ms,
         } => stream_events(&id, json, snapshot, once, interval_ms)?,
+        Command::Health { id, json } => run_healthcheck(&id, json)?,
         Command::Ps { json } => list_containers(json)?,
         Command::Exec { tty, id, args } => exec_container(&id, &args, tty)?,
         Command::Logs { id, follow } => show_logs(&id, follow)?,
@@ -1015,6 +1021,94 @@ fn container_status_name(status: &ContainerStatus) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct HealthResult {
+    id: String,
+    status: String,
+    exit_code: Option<i32>,
+    signal: Option<String>,
+    command: Vec<String>,
+}
+
+fn run_healthcheck(id: &str, json: bool) -> Result<()> {
+    let state = state::load_current(id)?;
+    if state.status != ContainerStatus::Running {
+        bail!("container {id} is not running");
+    }
+
+    let Some(pid) = state.pid else {
+        bail!("container {id} has no pid");
+    };
+
+    let config = load_config(Path::new(&state.bundle).join("config.json"))?;
+    let healthcheck = config
+        .healthcheck
+        .as_ref()
+        .context("container has no healthcheck configured")?;
+    let args = healthcheck_command_args(healthcheck)?;
+
+    let exit = exec_in_container(ExecConfig {
+        target_pid: pid,
+        args: &args,
+        env: &config.process.env,
+        cwd: config.process.cwd.as_deref(),
+        cgroup_path: state.cgroup_path.as_deref(),
+        tty: false,
+    })?;
+
+    let healthy = exit.code == Some(0) && exit.signal.is_none();
+    let result = HealthResult {
+        id: id.to_string(),
+        status: if healthy { "healthy" } else { "unhealthy" }.to_string(),
+        exit_code: exit.code,
+        signal: exit.signal,
+        command: args,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else {
+        println!("id: {}", result.id);
+        println!("status: {}", result.status);
+        println!("command: {:?}", result.command);
+        if let Some(code) = result.exit_code {
+            println!("exit_code: {code}");
+        }
+        if let Some(signal) = result.signal {
+            println!("signal: {signal}");
+        }
+    }
+
+    Ok(())
+}
+
+fn healthcheck_command_args(healthcheck: &Healthcheck) -> Result<Vec<String>> {
+    let Some((kind, rest)) = healthcheck.test.split_first() else {
+        bail!("healthcheck.test must not be empty");
+    };
+
+    match kind.as_str() {
+        "NONE" => bail!("healthcheck is disabled"),
+        "CMD" => {
+            if rest.is_empty() {
+                bail!("healthcheck CMD must include a command");
+            }
+            Ok(rest.to_vec())
+        }
+        "CMD-SHELL" => {
+            if rest.is_empty() {
+                bail!("healthcheck CMD-SHELL must include a command");
+            }
+            Ok(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                rest.join(" "),
+            ])
+        }
+        _ => Ok(healthcheck.test.clone()),
+    }
+}
+
 fn list_containers(json: bool) -> Result<()> {
     let states = state::list()?;
 
@@ -1290,5 +1384,55 @@ mod tests {
         assert_eq!(fields.get("pids.max"), Some(&1));
         assert_eq!(fields.get("cpu.nr_throttled"), Some(&3));
         assert_eq!(fields.get("cpu.throttled_usec"), Some(&40));
+    }
+
+    #[test]
+    fn builds_cmd_healthcheck_args() {
+        let healthcheck = Healthcheck {
+            test: vec!["CMD".to_string(), "/bin/true".to_string()],
+            interval: None,
+            timeout: None,
+            retries: None,
+        };
+
+        assert_eq!(
+            healthcheck_command_args(&healthcheck).expect("valid healthcheck"),
+            ["/bin/true".to_string()]
+        );
+    }
+
+    #[test]
+    fn builds_cmd_shell_healthcheck_args() {
+        let healthcheck = Healthcheck {
+            test: vec![
+                "CMD-SHELL".to_string(),
+                "echo".to_string(),
+                "ok".to_string(),
+            ],
+            interval: None,
+            timeout: None,
+            retries: None,
+        };
+
+        assert_eq!(
+            healthcheck_command_args(&healthcheck).expect("valid healthcheck"),
+            [
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo ok".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_disabled_healthcheck_args() {
+        let healthcheck = Healthcheck {
+            test: vec!["NONE".to_string()],
+            interval: None,
+            timeout: None,
+            retries: None,
+        };
+
+        assert!(healthcheck_command_args(&healthcheck).is_err());
     }
 }

@@ -15,6 +15,9 @@ pub struct OciConfig {
     pub mounts: Vec<Mount>,
 
     #[serde(default)]
+    pub healthcheck: Option<Healthcheck>,
+
+    #[serde(default)]
     pub linux: Option<Linux>,
 
     #[serde(default)]
@@ -38,6 +41,21 @@ pub struct Root {
 
     #[serde(default)]
     pub readonly: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Healthcheck {
+    #[serde(default)]
+    pub test: Vec<String>,
+
+    #[serde(default)]
+    pub interval: Option<String>,
+
+    #[serde(default)]
+    pub timeout: Option<String>,
+
+    #[serde(default)]
+    pub retries: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +161,12 @@ impl OciConfig {
             }
         }
 
+        if let Some(healthcheck) = &self.healthcheck {
+            if healthcheck.test.is_empty() {
+                bail!("healthcheck.test must not be empty");
+            }
+        }
+
         if let Some(overlay) = self.crun.as_ref().and_then(|crun| crun.overlay.as_ref()) {
             if overlay.enabled {
                 if overlay.upperdir.trim().is_empty() {
@@ -196,6 +220,12 @@ mod tests {
                     "path": "rootfs",
                     "readonly": true
                 },
+                "healthcheck": {
+                    "test": ["CMD", "/bin/sh", "-c", "true"],
+                    "interval": "30s",
+                    "timeout": "5s",
+                    "retries": 3
+                },
                 "mounts": [
                     {
                         "destination": "/data",
@@ -222,6 +252,17 @@ mod tests {
         assert_eq!(config.process.cwd.as_deref(), Some("/tmp"));
         assert_eq!(config.root.path, "rootfs");
         assert!(config.root.readonly);
+        let healthcheck = config
+            .healthcheck
+            .as_ref()
+            .expect("healthcheck should parse");
+        assert_eq!(
+            healthcheck.test,
+            ["CMD", "/bin/sh", "-c", "true"].map(str::to_string)
+        );
+        assert_eq!(healthcheck.interval.as_deref(), Some("30s"));
+        assert_eq!(healthcheck.timeout.as_deref(), Some("5s"));
+        assert_eq!(healthcheck.retries, Some(3));
         assert_eq!(config.mounts.len(), 1);
         assert_eq!(config.mounts[0].destination, "/data");
         assert_eq!(config.mounts[0].source.as_deref(), Some("/tmp/data"));
@@ -303,5 +344,19 @@ mod tests {
         .expect_err("empty overlay paths should be rejected");
 
         assert!(error.to_string().contains("crun.overlay.upperdir"));
+    }
+
+    #[test]
+    fn rejects_empty_healthcheck_test() {
+        let error = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "healthcheck": { "test": [] }
+            }"#,
+        )
+        .expect_err("empty healthcheck test should be rejected");
+
+        assert!(error.to_string().contains("healthcheck.test"));
     }
 }
