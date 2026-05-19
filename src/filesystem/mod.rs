@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use nix::unistd::{chdir, pivot_root};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::fs::{self, File};
+use std::path::{Component, Path, PathBuf};
 
 use crate::spec::config::Mount;
 
@@ -130,14 +130,12 @@ fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
         .source
         .as_deref()
         .context("bind mount source is required")?;
+    let source_path = Path::new(source);
+    let source_metadata = fs::metadata(source_path)
+        .with_context(|| format!("failed to stat bind mount source: {source}"))?;
     let destination = container_mount_destination(rootfs, &mount_config.destination)?;
 
-    fs::create_dir_all(&destination).with_context(|| {
-        format!(
-            "failed to create mount destination: {}",
-            destination.display()
-        )
-    })?;
+    prepare_bind_mount_destination(&destination, source_metadata.is_dir())?;
 
     let recursive = mount_config
         .options
@@ -151,7 +149,7 @@ fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
     }
 
     mount(
-        Some(Path::new(source)),
+        Some(source_path),
         destination.as_path(),
         None::<&str>,
         flags,
@@ -166,19 +164,17 @@ fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
     })?;
 
     if readonly {
-        mount::<Path, Path, str, str>(
-            None,
-            destination.as_path(),
-            None,
-            MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
-            None,
-        )
-        .with_context(|| {
-            format!(
-                "failed to remount bind mount readonly: {}",
-                destination.display()
-            )
-        })?;
+        let mut remount_flags = MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY;
+        if recursive {
+            remount_flags |= MsFlags::MS_REC;
+        }
+        mount::<Path, Path, str, str>(None, destination.as_path(), None, remount_flags, None)
+            .with_context(|| {
+                format!(
+                    "failed to remount bind mount readonly: {}",
+                    destination.display()
+                )
+            })?;
     }
 
     Ok(())
@@ -193,11 +189,75 @@ fn container_mount_destination(rootfs: &Path, destination: &str) -> Result<PathB
         );
     }
 
-    let relative = destination
-        .strip_prefix("/")
-        .context("failed to normalize mount destination")?;
+    let mut relative = PathBuf::new();
+    for component in destination.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(part) => relative.push(part),
+            Component::ParentDir => {
+                bail!(
+                    "mount destination must not escape rootfs: {}",
+                    destination.display()
+                );
+            }
+            Component::Prefix(_) => {
+                bail!(
+                    "mount destination contains unsupported prefix: {}",
+                    destination.display()
+                );
+            }
+        }
+    }
+
+    if relative.as_os_str().is_empty() {
+        bail!("mount destination must not be container root");
+    }
 
     Ok(rootfs.join(relative))
+}
+
+fn prepare_bind_mount_destination(destination: &Path, source_is_dir: bool) -> Result<()> {
+    if source_is_dir {
+        if destination.exists() && !destination.is_dir() {
+            bail!(
+                "bind mount destination exists but is not a directory: {}",
+                destination.display()
+            );
+        }
+
+        fs::create_dir_all(destination).with_context(|| {
+            format!(
+                "failed to create mount destination directory: {}",
+                destination.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create mount destination parent: {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    if destination.exists() && destination.is_dir() {
+        bail!(
+            "bind mount destination exists but is a directory: {}",
+            destination.display()
+        );
+    }
+
+    File::create(destination).with_context(|| {
+        format!(
+            "failed to create mount destination file: {}",
+            destination.display()
+        )
+    })?;
+
+    Ok(())
 }
 
 fn remount_root_readonly() -> Result<()> {
@@ -270,4 +330,70 @@ fn setup_dns() -> Result<()> {
     .context("failed to write /etc/resolv.conf")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("crun-fs-test-{name}-{nanos}"))
+    }
+
+    #[test]
+    fn resolves_absolute_mount_destination_inside_rootfs() {
+        let rootfs = Path::new("/tmp/rootfs");
+        let destination = container_mount_destination(rootfs, "/var/lib/data")
+            .expect("destination should resolve");
+
+        assert_eq!(destination, PathBuf::from("/tmp/rootfs/var/lib/data"));
+    }
+
+    #[test]
+    fn rejects_mount_destination_that_escapes_rootfs() {
+        let error = container_mount_destination(Path::new("/tmp/rootfs"), "/../../host")
+            .expect_err("escaping destination should be rejected");
+
+        assert!(error.to_string().contains("must not escape rootfs"));
+    }
+
+    #[test]
+    fn rejects_container_root_mount_destination() {
+        let error = container_mount_destination(Path::new("/tmp/rootfs"), "/")
+            .expect_err("root destination should be rejected");
+
+        assert!(error.to_string().contains("must not be container root"));
+    }
+
+    #[test]
+    fn prepares_directory_bind_mount_destination() {
+        let destination = unique_temp_path("dir").join("data");
+
+        prepare_bind_mount_destination(&destination, true)
+            .expect("directory destination should be created");
+
+        assert!(destination.is_dir());
+        let _ = fs::remove_dir_all(destination.parent().expect("destination has parent"));
+    }
+
+    #[test]
+    fn prepares_file_bind_mount_destination() {
+        let destination = unique_temp_path("file").join("etc").join("config.txt");
+
+        prepare_bind_mount_destination(&destination, false)
+            .expect("file destination should be created");
+
+        assert!(destination.is_file());
+        let _ = fs::remove_dir_all(
+            destination
+                .parent()
+                .and_then(Path::parent)
+                .expect("destination has test root"),
+        );
+    }
 }
