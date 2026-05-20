@@ -234,11 +234,11 @@ sudo target/release/crun restore ckpt-demo
 
 Objective: produce repeatable performance evidence.
 
-- [ ] Add JSON output to `scripts/benchmark.sh`.
-- [ ] Measure startup `--net none`.
-- [ ] Measure startup `--net bridge`.
-- [ ] Measure `exec` latency.
-- [ ] Measure memory footprint where possible.
+- [x] Add JSON output to `scripts/benchmark.sh`.
+- [x] Measure startup `--net none`.
+- [x] Measure startup `--net bridge`.
+- [x] Measure `exec` latency.
+- [x] Measure memory footprint where possible.
 
 Pass:
 
