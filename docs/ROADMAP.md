@@ -165,11 +165,11 @@ sudo target/release/crun delete oci-demo
 
 Objective: provide secure defaults as named profiles.
 
-- [ ] Add `crun.profile` in config.
-- [ ] Implement `restricted`.
-- [ ] Implement `debug`.
-- [ ] Merge profile defaults with explicit config values predictably.
-- [ ] Expose chosen profile in state.
+- [x] Add `crun.profile` in config.
+- [x] Implement `restricted`.
+- [x] Implement `debug`.
+- [x] Merge profile defaults with explicit config values predictably.
+- [x] Expose chosen profile in state.
 
 Pass:
 

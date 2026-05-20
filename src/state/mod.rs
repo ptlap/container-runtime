@@ -39,6 +39,8 @@ pub struct ContainerState {
     pub userns_mode: String,
     #[serde(default = "default_rootfs_mode")]
     pub rootfs_mode: String,
+    #[serde(default = "default_policy_profile")]
+    pub policy_profile: String,
     #[serde(default)]
     pub tty: bool,
     #[serde(default)]
@@ -72,6 +74,7 @@ pub struct RuntimeMetadata<'a> {
     pub log_mode: &'a str,
     pub userns_mode: &'a str,
     pub rootfs_mode: &'a str,
+    pub policy_profile: &'a str,
     pub tty: bool,
 }
 
@@ -94,6 +97,7 @@ impl ContainerState {
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
             rootfs_mode: metadata.rootfs_mode.to_string(),
+            policy_profile: metadata.policy_profile.to_string(),
             tty: metadata.tty,
             health: None,
             created_at_unix: now,
@@ -127,6 +131,7 @@ impl ContainerState {
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
             rootfs_mode: metadata.rootfs_mode.to_string(),
+            policy_profile: metadata.policy_profile.to_string(),
             tty: metadata.tty,
             health: None,
             created_at_unix: now,
@@ -196,6 +201,10 @@ fn default_userns_mode() -> String {
 
 fn default_rootfs_mode() -> String {
     "direct".to_string()
+}
+
+fn default_policy_profile() -> String {
+    "none".to_string()
 }
 
 pub fn load(id: &str) -> Result<ContainerState> {
@@ -427,6 +436,7 @@ mod tests {
             log_mode: "on",
             userns_mode: "private",
             rootfs_mode: "overlay",
+            policy_profile: "restricted",
             tty: false,
         };
 
@@ -463,6 +473,7 @@ mod tests {
         assert_eq!(loaded.security_profile, "default");
         assert_eq!(loaded.userns_mode, "private");
         assert_eq!(loaded.rootfs_mode, "overlay");
+        assert_eq!(loaded.policy_profile, "restricted");
         assert_eq!(loaded.health, None);
 
         state
@@ -509,6 +520,7 @@ mod tests {
                 log_mode: "auto",
                 userns_mode: "host",
                 rootfs_mode: "direct",
+                policy_profile: "none",
                 tty: false,
             },
         )
@@ -528,6 +540,7 @@ mod tests {
         assert_eq!(loaded.security_profile, "default");
         assert_eq!(loaded.userns_mode, "host");
         assert_eq!(loaded.rootfs_mode, "direct");
+        assert_eq!(loaded.policy_profile, "none");
 
         delete_from(&root, "demo-created").expect("created state should delete");
         assert!(!container_dir(&root, "demo-created").exists());
@@ -547,6 +560,7 @@ mod tests {
                 log_mode: "auto",
                 userns_mode: "host",
                 rootfs_mode: "direct",
+                policy_profile: "none",
                 tty: false,
             },
         )
@@ -560,6 +574,7 @@ mod tests {
                 log_mode: "auto",
                 userns_mode: "host",
                 rootfs_mode: "direct",
+                policy_profile: "none",
                 tty: false,
             },
         )
@@ -600,6 +615,7 @@ mod tests {
             log_mode: "auto",
             userns_mode: "host",
             rootfs_mode: "direct",
+            policy_profile: "none",
             tty: false,
         };
 

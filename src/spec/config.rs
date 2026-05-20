@@ -120,6 +120,9 @@ pub struct Healthcheck {
 #[derive(Debug, Deserialize)]
 pub struct CrunConfig {
     #[serde(default)]
+    pub profile: Option<String>,
+
+    #[serde(default)]
     pub overlay: Option<CrunOverlay>,
 }
 
@@ -258,6 +261,12 @@ impl OciConfig {
             }
         }
 
+        if let Some(profile) = self.crun.as_ref().and_then(|crun| crun.profile.as_deref()) {
+            if !matches!(profile, "restricted" | "debug") {
+                bail!("unsupported crun.profile: {profile}");
+            }
+        }
+
         if let Some(linux) = &self.linux {
             for path in linux.masked_paths.iter().chain(linux.readonly_paths.iter()) {
                 validate_container_path(path)?;
@@ -368,6 +377,7 @@ mod tests {
                     }
                 ],
                 "crun": {
+                    "profile": "restricted",
                     "overlay": {
                         "enabled": true,
                         "upperdir": "../overlay/demo/upper",
@@ -405,6 +415,13 @@ mod tests {
             .as_ref()
             .and_then(|crun| crun.overlay.as_ref())
             .expect("overlay should parse");
+        assert_eq!(
+            config
+                .crun
+                .as_ref()
+                .and_then(|crun| crun.profile.as_deref()),
+            Some("restricted")
+        );
         assert!(overlay.enabled);
         assert_eq!(overlay.upperdir, "../overlay/demo/upper");
         assert_eq!(overlay.workdir, "../overlay/demo/work");
@@ -562,6 +579,20 @@ mod tests {
         )
         .expect_err("relative masked path should be rejected");
         assert!(path_error.to_string().contains("must be absolute"));
+    }
+
+    #[test]
+    fn rejects_unknown_crun_profile() {
+        let error = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "crun": { "profile": "fast-but-unsafe" }
+            }"#,
+        )
+        .expect_err("unknown profile should be rejected");
+
+        assert!(error.to_string().contains("unsupported crun.profile"));
     }
 
     #[test]

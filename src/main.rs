@@ -206,6 +206,13 @@ enum LogMode {
     Off,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PolicyProfile {
+    None,
+    Restricted,
+    Debug,
+}
+
 impl From<CliNetworkMode> for NetworkMode {
     fn from(value: CliNetworkMode) -> Self {
         match value {
@@ -241,6 +248,25 @@ impl LogMode {
             Self::Auto => "auto",
             Self::On => "on",
             Self::Off => "off",
+        }
+    }
+}
+
+impl PolicyProfile {
+    fn from_config(value: Option<&str>) -> Result<Self> {
+        match value {
+            None => Ok(Self::None),
+            Some("restricted") => Ok(Self::Restricted),
+            Some("debug") => Ok(Self::Debug),
+            Some(value) => bail!("unsupported crun.profile: {value}"),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Restricted => "restricted",
+            Self::Debug => "debug",
         }
     }
 }
@@ -381,6 +407,14 @@ fn create_container(options: RunOptions) -> Result<()> {
     }
 
     let config = load_config(options.bundle.join("config.json"))?;
+    let policy_profile = PolicyProfile::from_config(
+        config
+            .crun
+            .as_ref()
+            .and_then(|crun| crun.profile.as_deref()),
+    )?;
+    let security_profile = apply_profile_security(options.security_profile, policy_profile);
+    let log_mode = apply_profile_log_mode(options.log_mode, policy_profile);
     let rootfs_mode =
         if resolve_overlay_config(&options.bundle, &config.root.path, config.crun.as_ref())?
             .is_some()
@@ -395,10 +429,11 @@ fn create_container(options: RunOptions) -> Result<()> {
         &options.bundle,
         RuntimeMetadata {
             network_mode: options.network_mode.as_str(),
-            security_profile: options.security_profile.as_str(),
-            log_mode: options.log_mode.as_str(),
+            security_profile: security_profile.as_str(),
+            log_mode: log_mode.as_str(),
             userns_mode: options.userns_mode.as_str(),
             rootfs_mode,
+            policy_profile: policy_profile.as_str(),
             tty: options.tty,
         },
     )?;
@@ -441,12 +476,18 @@ fn execute_container(
             "warn: bridge networking is not supported in rootless mode, falling back to none"
         );
     }
-    let security_profile = options.security_profile;
-    let log_mode = options.log_mode;
     let userns_mode = options.userns_mode;
 
     let config_path = bundle.join("config.json");
     let config = load_config(config_path)?;
+    let policy_profile = PolicyProfile::from_config(
+        config
+            .crun
+            .as_ref()
+            .and_then(|crun| crun.profile.as_deref()),
+    )?;
+    let security_profile = apply_profile_security(options.security_profile, policy_profile);
+    let log_mode = apply_profile_log_mode(options.log_mode, policy_profile);
 
     let rootfs = bundle.join(&config.root.path);
     let overlay_config = resolve_overlay_config(&bundle, &config.root.path, config.crun.as_ref())?;
@@ -484,8 +525,9 @@ fn execute_container(
     println!("log mode: {}", log_mode.as_str());
     println!("user namespace: {}", userns_mode.as_str());
     println!("rootfs mode: {rootfs_mode}");
+    println!("policy profile: {}", policy_profile.as_str());
 
-    let cgroup_config = config.linux.as_ref().and_then(|linux| {
+    let explicit_cgroup_config = config.linux.as_ref().and_then(|linux| {
         linux.resources.as_ref().map(|resources| CgroupConfig {
             memory_limit: resources.memory.as_ref().and_then(|m| m.limit),
             cpu_quota: resources.cpu.as_ref().and_then(|c| c.quota),
@@ -493,6 +535,7 @@ fn execute_container(
             pids_limit: resources.pids.as_ref().and_then(|p| p.limit),
         })
     });
+    let cgroup_config = apply_profile_cgroup(explicit_cgroup_config, policy_profile);
     let masked_paths = config
         .linux
         .as_ref()
@@ -534,6 +577,7 @@ fn execute_container(
                     log_mode: log_mode.as_str(),
                     userns_mode: userns_mode.as_str(),
                     rootfs_mode,
+                    policy_profile: policy_profile.as_str(),
                     tty: options.tty,
                 },
             )?
@@ -652,6 +696,63 @@ fn parse_log_mode(value: &str) -> Result<LogMode> {
     }
 }
 
+fn apply_profile_security(
+    security_profile: SecurityProfile,
+    policy_profile: PolicyProfile,
+) -> SecurityProfile {
+    match policy_profile {
+        PolicyProfile::Restricted => SecurityProfile::Default,
+        PolicyProfile::Debug if security_profile == SecurityProfile::Default => {
+            SecurityProfile::Unconfined
+        }
+        _ => security_profile,
+    }
+}
+
+fn apply_profile_log_mode(log_mode: LogMode, policy_profile: PolicyProfile) -> LogMode {
+    match policy_profile {
+        PolicyProfile::Debug if matches!(log_mode, LogMode::Auto) => LogMode::On,
+        _ => log_mode,
+    }
+}
+
+fn apply_profile_cgroup(
+    explicit: Option<CgroupConfig>,
+    policy_profile: PolicyProfile,
+) -> Option<CgroupConfig> {
+    let defaults = match policy_profile {
+        PolicyProfile::Restricted => CgroupConfig {
+            memory_limit: Some(256 * 1024 * 1024),
+            cpu_quota: None,
+            cpu_period: None,
+            pids_limit: Some(64),
+        },
+        _ => CgroupConfig {
+            memory_limit: None,
+            cpu_quota: None,
+            cpu_period: None,
+            pids_limit: None,
+        },
+    };
+
+    let merged = if let Some(explicit) = explicit {
+        CgroupConfig {
+            memory_limit: explicit.memory_limit.or(defaults.memory_limit),
+            cpu_quota: explicit.cpu_quota.or(defaults.cpu_quota),
+            cpu_period: explicit.cpu_period.or(defaults.cpu_period),
+            pids_limit: explicit.pids_limit.or(defaults.pids_limit),
+        }
+    } else {
+        defaults
+    };
+
+    (merged.memory_limit.is_some()
+        || merged.cpu_quota.is_some()
+        || merged.cpu_period.is_some()
+        || merged.pids_limit.is_some())
+    .then_some(merged)
+}
+
 fn parse_userns_mode(value: &str) -> Result<UserNamespaceMode> {
     match value {
         "host" => Ok(UserNamespaceMode::Host),
@@ -723,6 +824,7 @@ fn show_state(id: &str, json: bool) -> Result<()> {
         println!("security_profile: {}", state.security_profile);
         println!("userns_mode: {}", state.userns_mode);
         println!("rootfs_mode: {}", state.rootfs_mode);
+        println!("policy_profile: {}", state.policy_profile);
         if let Some(health) = state.health.as_ref() {
             println!("health_status: {}", health.status);
             println!("health_checked_at_unix: {}", health.checked_at_unix);
@@ -1243,12 +1345,12 @@ fn list_containers(json: bool) -> Result<()> {
     }
 
     println!(
-        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<10} BUNDLE",
-        "ID", "STATUS", "PID", "NET", "SECURITY", "USERNS", "ROOTFS", "HEALTH"
+        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<10} {:<10} BUNDLE",
+        "ID", "STATUS", "PID", "NET", "SECURITY", "USERNS", "ROOTFS", "PROFILE", "HEALTH"
     );
     for state in states {
         println!(
-            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<10} {}",
+            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<10} {:<10} {}",
             state.id,
             format!("{:?}", state.status).to_lowercase(),
             state.pid.map_or("-".to_string(), |pid| pid.to_string()),
@@ -1256,6 +1358,7 @@ fn list_containers(json: bool) -> Result<()> {
             state.security_profile,
             state.userns_mode,
             state.rootfs_mode,
+            state.policy_profile,
             state
                 .health
                 .as_ref()
