@@ -223,6 +223,10 @@ pub fn list() -> Result<Vec<ContainerState>> {
     list_from(Path::new(DEFAULT_STATE_ROOT))
 }
 
+pub fn list_raw() -> Result<Vec<ContainerState>> {
+    list_raw_from(Path::new(DEFAULT_STATE_ROOT))
+}
+
 pub fn log_path(id: &str) -> Result<PathBuf> {
     validate_id(id)?;
     Ok(log_file(id))
@@ -245,6 +249,15 @@ fn load_current_from(root: &Path, id: &str) -> Result<ContainerState> {
 }
 
 fn list_from(root: &Path) -> Result<Vec<ContainerState>> {
+    let mut states = list_raw_from(root)?;
+    for state in &mut states {
+        refresh_liveness(root, state)?;
+    }
+    states.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(states)
+}
+
+fn list_raw_from(root: &Path) -> Result<Vec<ContainerState>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -266,7 +279,7 @@ fn list_from(root: &Path) -> Result<Vec<ContainerState>> {
         if !state_file(root, &id).exists() {
             continue;
         }
-        states.push(load_current_from(root, &id)?);
+        states.push(load_from(root, &id)?);
     }
 
     states.sort_by(|left, right| left.id.cmp(&right.id));
@@ -307,7 +320,7 @@ fn release_state_network_allocation(state: &ContainerState) {
     }
 }
 
-fn pid_is_alive(pid: i32) -> bool {
+pub fn pid_is_alive(pid: i32) -> bool {
     let proc_dir = Path::new("/proc").join(pid.to_string());
     if !proc_dir.exists() {
         return false;

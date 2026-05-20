@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::cgroup::{read_stats, CgroupConfig};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
+use container_runtime::doctor;
 use container_runtime::filesystem::OverlayConfig;
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
@@ -130,6 +131,12 @@ enum Command {
     },
     Delete {
         id: String,
+    },
+    Doctor {
+        #[arg(long)]
+        fix: bool,
+        #[arg(long)]
+        json: bool,
     },
     Debug {
         #[command(subcommand)]
@@ -305,6 +312,7 @@ fn main() -> Result<()> {
         Command::Kill { id, signal } => kill_container(&id, &signal)?,
         Command::Stop { id, timeout } => stop_container(&id, timeout)?,
         Command::Delete { id } => delete_container(&id)?,
+        Command::Doctor { fix, json } => run_doctor(fix, json)?,
         Command::Debug { command } => debug_command(command)?,
     }
 
@@ -1328,6 +1336,35 @@ fn wait_for_stopped(id: &str, timeout: Duration) -> Result<bool> {
 fn delete_container(id: &str) -> Result<()> {
     state::delete(id)?;
     println!("deleted container state: {id}");
+    Ok(())
+}
+
+fn run_doctor(fix: bool, json: bool) -> Result<()> {
+    let report = doctor::run(fix)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    if report.issues.is_empty() {
+        println!("doctor: ok");
+        return Ok(());
+    }
+
+    for issue in &report.issues {
+        let fixed = if issue.fixed { "fixed" } else { "unfixed" };
+        let id = issue.id.as_deref().unwrap_or("-");
+        let path = issue.path.as_deref().unwrap_or("-");
+        println!(
+            "{} id={} path={} status={} message={}",
+            issue.kind, id, path, fixed, issue.message
+        );
+    }
+
+    if !report.is_clean() {
+        bail!("doctor found unfixed issues");
+    }
+
     Ok(())
 }
 

@@ -55,12 +55,12 @@ sudo scripts/e2e.sh
 
 Objective: add operational recovery checks for stale runtime resources.
 
-- [ ] Add `crun doctor`.
-- [ ] Add `crun doctor --fix`.
-- [ ] Detect stale running state with dead PID.
-- [ ] Detect orphan cgroups under `/sys/fs/cgroup/container-runtime`.
-- [ ] Detect stale bridge network allocations.
-- [ ] Detect orphan `vethh*` links where possible.
+- [x] Add `crun doctor`.
+- [x] Add `crun doctor --fix`.
+- [x] Detect stale running state with dead PID.
+- [x] Detect orphan cgroups under `/sys/fs/cgroup/container-runtime`.
+- [x] Detect stale bridge network allocations.
+- [x] Detect orphan `vethh*` links where possible.
 
 Pass:
 
