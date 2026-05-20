@@ -1030,6 +1030,7 @@ struct HealthResult {
     id: String,
     checked_at_unix: u64,
     status: String,
+    attempts: u32,
     exit_code: Option<i32>,
     signal: Option<String>,
     command: Vec<String>,
@@ -1051,15 +1052,28 @@ fn run_healthcheck(id: &str, json: bool) -> Result<()> {
         .as_ref()
         .context("container has no healthcheck configured")?;
     let args = healthcheck_command_args(healthcheck)?;
+    let max_attempts = healthcheck_attempts(healthcheck);
 
-    let exit = exec_in_container(ExecConfig {
-        target_pid: pid,
-        args: &args,
-        env: &config.process.env,
-        cwd: config.process.cwd.as_deref(),
-        cgroup_path: state.cgroup_path.as_deref(),
-        tty: false,
-    })?;
+    let mut attempts = 0;
+    let mut exit = None;
+    while attempts < max_attempts {
+        attempts += 1;
+        let current_exit = exec_in_container(ExecConfig {
+            target_pid: pid,
+            args: &args,
+            env: &config.process.env,
+            cwd: config.process.cwd.as_deref(),
+            cgroup_path: state.cgroup_path.as_deref(),
+            tty: false,
+        })?;
+
+        let healthy = current_exit.code == Some(0) && current_exit.signal.is_none();
+        exit = Some(current_exit);
+        if healthy {
+            break;
+        }
+    }
+    let exit = exit.context("healthcheck did not run")?;
 
     let healthy = exit.code == Some(0) && exit.signal.is_none();
     let checked_at_unix = unix_timestamp();
@@ -1077,6 +1091,7 @@ fn run_healthcheck(id: &str, json: bool) -> Result<()> {
         id: id.to_string(),
         checked_at_unix,
         status: health.status,
+        attempts,
         exit_code: health.exit_code,
         signal: health.signal,
         command: health.command,
@@ -1088,6 +1103,7 @@ fn run_healthcheck(id: &str, json: bool) -> Result<()> {
         println!("id: {}", result.id);
         println!("status: {}", result.status);
         println!("checked_at_unix: {}", result.checked_at_unix);
+        println!("attempts: {}", result.attempts);
         println!("command: {:?}", result.command);
         if let Some(code) = result.exit_code {
             println!("exit_code: {code}");
@@ -1125,6 +1141,10 @@ fn healthcheck_command_args(healthcheck: &Healthcheck) -> Result<Vec<String>> {
         }
         _ => Ok(healthcheck.test.clone()),
     }
+}
+
+fn healthcheck_attempts(healthcheck: &Healthcheck) -> u32 {
+    healthcheck.retries.unwrap_or(0).saturating_add(1)
 }
 
 fn list_containers(json: bool) -> Result<()> {
@@ -1457,5 +1477,24 @@ mod tests {
         };
 
         assert!(healthcheck_command_args(&healthcheck).is_err());
+    }
+
+    #[test]
+    fn computes_healthcheck_attempts_from_retries() {
+        let default_retries = Healthcheck {
+            test: vec!["CMD".to_string(), "true".to_string()],
+            interval: None,
+            timeout: None,
+            retries: None,
+        };
+        let configured_retries = Healthcheck {
+            test: vec!["CMD".to_string(), "true".to_string()],
+            interval: None,
+            timeout: None,
+            retries: Some(3),
+        };
+
+        assert_eq!(healthcheck_attempts(&default_retries), 1);
+        assert_eq!(healthcheck_attempts(&configured_retries), 4);
     }
 }
