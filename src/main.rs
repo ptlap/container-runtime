@@ -107,6 +107,10 @@ enum Command {
         id: String,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        watch: bool,
+        #[arg(long, default_value_t = DEFAULT_EVENTS_INTERVAL_MS)]
+        interval_ms: u64,
     },
     Ps {
         #[arg(long)]
@@ -321,7 +325,12 @@ fn main() -> Result<()> {
             once,
             interval_ms,
         } => stream_events(&id, json, history, snapshot, once, interval_ms)?,
-        Command::Health { id, json } => run_healthcheck(&id, json)?,
+        Command::Health {
+            id,
+            json,
+            watch,
+            interval_ms,
+        } => run_healthcheck(&id, json, watch, interval_ms)?,
         Command::Ps { json } => list_containers(json)?,
         Command::Exec { tty, id, args } => exec_container(&id, &args, tty)?,
         Command::Logs { id, follow } => show_logs(&id, follow)?,
@@ -1061,7 +1070,30 @@ struct HealthResult {
     command: Vec<String>,
 }
 
-fn run_healthcheck(id: &str, json: bool) -> Result<()> {
+fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: u64) -> Result<()> {
+    if interval_ms == 0 {
+        bail!("health interval must be greater than zero");
+    }
+
+    if watch {
+        let interval = Duration::from_millis(interval_ms);
+        loop {
+            let state = state::load_current(id)?;
+            if state.status != ContainerStatus::Running {
+                return Ok(());
+            }
+
+            let result = run_healthcheck_once(id)?;
+            print_health_result(&result, json)?;
+            thread::sleep(interval);
+        }
+    }
+
+    let result = run_healthcheck_once(id)?;
+    print_health_result(&result, json)
+}
+
+fn run_healthcheck_once(id: &str) -> Result<HealthResult> {
     let mut state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
         bail!("container {id} is not running");
@@ -1128,6 +1160,10 @@ fn run_healthcheck(id: &str, json: bool) -> Result<()> {
         command: health.command,
     };
 
+    Ok(result)
+}
+
+fn print_health_result(result: &HealthResult, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
@@ -1139,7 +1175,7 @@ fn run_healthcheck(id: &str, json: bool) -> Result<()> {
         if let Some(code) = result.exit_code {
             println!("exit_code: {code}");
         }
-        if let Some(signal) = result.signal {
+        if let Some(signal) = result.signal.as_deref() {
             println!("signal: {signal}");
         }
     }

@@ -127,10 +127,10 @@ sudo target/release/crun delete audit-demo
 
 Objective: turn healthcheck into a platform-like loop.
 
-- [ ] Add `crun health <id> --watch --interval-ms 1000`.
-- [ ] Keep updating health state until the container stops.
-- [ ] Honor `retries`.
-- [ ] Emit health events into runtime audit log when Goal 5 exists.
+- [x] Add `crun health <id> --watch --interval-ms 1000`.
+- [x] Keep updating health state until the container stops.
+- [x] Honor `retries`.
+- [x] Emit health events into runtime audit log when Goal 5 exists.
 
 Pass:
 
