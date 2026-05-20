@@ -41,10 +41,21 @@ pub struct ContainerState {
     pub rootfs_mode: String,
     #[serde(default)]
     pub tty: bool,
+    #[serde(default)]
+    pub health: Option<HealthState>,
     pub created_at_unix: u64,
     pub updated_at_unix: u64,
     pub exit_code: Option<i32>,
     pub signal: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HealthState {
+    pub status: String,
+    pub exit_code: Option<i32>,
+    pub signal: Option<String>,
+    pub command: Vec<String>,
+    pub checked_at_unix: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +95,7 @@ impl ContainerState {
             userns_mode: metadata.userns_mode.to_string(),
             rootfs_mode: metadata.rootfs_mode.to_string(),
             tty: metadata.tty,
+            health: None,
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -116,6 +128,7 @@ impl ContainerState {
             userns_mode: metadata.userns_mode.to_string(),
             rootfs_mode: metadata.rootfs_mode.to_string(),
             tty: metadata.tty,
+            health: None,
             created_at_unix: now,
             updated_at_unix: now,
             exit_code: None,
@@ -138,6 +151,12 @@ impl ContainerState {
         self.updated_at_unix = unix_timestamp()?;
         self.exit_code = None;
         self.signal = None;
+        Ok(())
+    }
+
+    pub fn mark_health(&mut self, health: HealthState) -> Result<()> {
+        self.health = Some(health);
+        self.updated_at_unix = unix_timestamp()?;
         Ok(())
     }
 
@@ -422,6 +441,30 @@ mod tests {
         assert_eq!(loaded.security_profile, "default");
         assert_eq!(loaded.userns_mode, "private");
         assert_eq!(loaded.rootfs_mode, "overlay");
+        assert_eq!(loaded.health, None);
+
+        state
+            .mark_health(HealthState {
+                status: "healthy".to_string(),
+                exit_code: Some(0),
+                signal: None,
+                command: vec!["/bin/true".to_string()],
+                checked_at_unix: 42,
+            })
+            .expect("mark health");
+        save_to(&root, &state).expect("healthy state should save");
+        let loaded = load_from(&root, "demo").expect("healthy state should load");
+        assert_eq!(
+            loaded.health.as_ref().map(|health| health.status.as_str()),
+            Some("healthy")
+        );
+        assert_eq!(
+            loaded
+                .health
+                .as_ref()
+                .map(|health| health.command.as_slice()),
+            Some(["/bin/true".to_string()].as_slice())
+        );
 
         state.mark_stopped(Some(0), None).expect("mark stopped");
         save_to(&root, &state).expect("stopped state should save");
@@ -587,5 +630,6 @@ mod tests {
         assert_eq!(state.status, ContainerStatus::Created);
         assert_eq!(state.userns_mode, "host");
         assert_eq!(state.rootfs_mode, "direct");
+        assert_eq!(state.health, None);
     }
 }

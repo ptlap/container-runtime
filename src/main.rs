@@ -13,7 +13,7 @@ use container_runtime::selfexec::{
 use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
 use container_runtime::spec::config::{load_config, Healthcheck};
 use container_runtime::state::{
-    self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources,
+    self, ContainerState, ContainerStatus, HealthState, RuntimeMetadata, StartedResources,
 };
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
 use nix::sched::CloneFlags;
@@ -657,6 +657,10 @@ fn show_state(id: &str, json: bool) -> Result<()> {
         println!("security_profile: {}", state.security_profile);
         println!("userns_mode: {}", state.userns_mode);
         println!("rootfs_mode: {}", state.rootfs_mode);
+        if let Some(health) = state.health.as_ref() {
+            println!("health_status: {}", health.status);
+            println!("health_checked_at_unix: {}", health.checked_at_unix);
+        }
         println!("created_at_unix: {}", state.created_at_unix);
         println!("updated_at_unix: {}", state.updated_at_unix);
         if let Some(code) = state.exit_code {
@@ -1024,6 +1028,7 @@ fn container_status_name(status: &ContainerStatus) -> &'static str {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct HealthResult {
     id: String,
+    checked_at_unix: u64,
     status: String,
     exit_code: Option<i32>,
     signal: Option<String>,
@@ -1031,7 +1036,7 @@ struct HealthResult {
 }
 
 fn run_healthcheck(id: &str, json: bool) -> Result<()> {
-    let state = state::load_current(id)?;
+    let mut state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
         bail!("container {id} is not running");
     }
@@ -1057,12 +1062,24 @@ fn run_healthcheck(id: &str, json: bool) -> Result<()> {
     })?;
 
     let healthy = exit.code == Some(0) && exit.signal.is_none();
-    let result = HealthResult {
-        id: id.to_string(),
+    let checked_at_unix = unix_timestamp();
+    let health = HealthState {
         status: if healthy { "healthy" } else { "unhealthy" }.to_string(),
         exit_code: exit.code,
         signal: exit.signal,
         command: args,
+        checked_at_unix,
+    };
+    state.mark_health(health.clone())?;
+    state::save(&state)?;
+
+    let result = HealthResult {
+        id: id.to_string(),
+        checked_at_unix,
+        status: health.status,
+        exit_code: health.exit_code,
+        signal: health.signal,
+        command: health.command,
     };
 
     if json {
@@ -1070,6 +1087,7 @@ fn run_healthcheck(id: &str, json: bool) -> Result<()> {
     } else {
         println!("id: {}", result.id);
         println!("status: {}", result.status);
+        println!("checked_at_unix: {}", result.checked_at_unix);
         println!("command: {:?}", result.command);
         if let Some(code) = result.exit_code {
             println!("exit_code: {code}");
@@ -1118,12 +1136,12 @@ fn list_containers(json: bool) -> Result<()> {
     }
 
     println!(
-        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} BUNDLE",
-        "ID", "STATUS", "PID", "NET", "SECURITY", "USERNS", "ROOTFS"
+        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<10} BUNDLE",
+        "ID", "STATUS", "PID", "NET", "SECURITY", "USERNS", "ROOTFS", "HEALTH"
     );
     for state in states {
         println!(
-            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {}",
+            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<10} {}",
             state.id,
             format!("{:?}", state.status).to_lowercase(),
             state.pid.map_or("-".to_string(), |pid| pid.to_string()),
@@ -1131,6 +1149,11 @@ fn list_containers(json: bool) -> Result<()> {
             state.security_profile,
             state.userns_mode,
             state.rootfs_mode,
+            state
+                .health
+                .as_ref()
+                .map(|health| health.status.as_str())
+                .unwrap_or("-"),
             state.bundle
         );
     }
