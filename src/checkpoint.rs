@@ -1,0 +1,261 @@
+use crate::state::{self, ContainerStatus, DEFAULT_STATE_ROOT};
+use anyhow::{bail, Context, Result};
+use serde::Serialize;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+const EXPERIMENTAL_NOTE: &str =
+    "experimental CRIU research mode; restored processes are not reattached to runtime state";
+
+#[derive(Debug, Clone)]
+pub struct CheckpointOptions {
+    pub images_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RestoreOptions {
+    pub images_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CriuStatus {
+    pub available: bool,
+    pub version: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CheckpointReport {
+    pub id: String,
+    pub pid: i32,
+    pub images_dir: String,
+    pub criu: CriuStatus,
+    pub experimental: String,
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RestoreReport {
+    pub id: String,
+    pub images_dir: String,
+    pub criu: CriuStatus,
+    pub experimental: String,
+    pub command: Vec<String>,
+}
+
+pub fn checkpoint(id: &str, options: CheckpointOptions) -> Result<CheckpointReport> {
+    let container_state = state::load_current(id)?;
+    if container_state.status != ContainerStatus::Running {
+        bail!("container {id} is not running");
+    }
+    let pid = container_state
+        .pid
+        .context("running container state has no pid")?;
+    let criu = detect_criu();
+    ensure_criu_available(&criu)?;
+
+    let images_dir = options
+        .images_dir
+        .unwrap_or_else(|| default_checkpoint_dir(id));
+    if images_dir.exists() {
+        bail!(
+            "checkpoint image directory already exists: {}",
+            images_dir.display()
+        );
+    }
+    fs::create_dir_all(&images_dir).with_context(|| {
+        format!(
+            "failed to create checkpoint image directory: {}",
+            images_dir.display()
+        )
+    })?;
+
+    let command = checkpoint_command(pid, &images_dir);
+    if let Err(error) =
+        run_criu(&command).with_context(|| format!("failed to checkpoint container {id}"))
+    {
+        let _ = fs::remove_dir_all(&images_dir);
+        return Err(error);
+    }
+
+    Ok(CheckpointReport {
+        id: id.to_string(),
+        pid,
+        images_dir: images_dir.display().to_string(),
+        criu,
+        experimental: EXPERIMENTAL_NOTE.to_string(),
+        command,
+    })
+}
+
+pub fn restore(id: &str, options: RestoreOptions) -> Result<RestoreReport> {
+    validate_checkpoint_id(id)?;
+    let criu = detect_criu();
+    ensure_criu_available(&criu)?;
+
+    let images_dir = options
+        .images_dir
+        .unwrap_or_else(|| default_checkpoint_dir(id));
+    if !images_dir.is_dir() {
+        bail!(
+            "checkpoint image directory does not exist: {}",
+            images_dir.display()
+        );
+    }
+
+    let command = restore_command(&images_dir);
+    run_criu(&command).with_context(|| format!("failed to restore checkpoint for {id}"))?;
+
+    Ok(RestoreReport {
+        id: id.to_string(),
+        images_dir: images_dir.display().to_string(),
+        criu,
+        experimental: EXPERIMENTAL_NOTE.to_string(),
+        command,
+    })
+}
+
+pub fn detect_criu() -> CriuStatus {
+    match Command::new("criu")
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            CriuStatus {
+                available: true,
+                version: (!version.is_empty()).then_some(version),
+                error: None,
+            }
+        }
+        Ok(output) => {
+            let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            CriuStatus {
+                available: false,
+                version: None,
+                error: Some(if error.is_empty() {
+                    format!("criu --version exited with {}", output.status)
+                } else {
+                    error
+                }),
+            }
+        }
+        Err(error) => CriuStatus {
+            available: false,
+            version: None,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+fn ensure_criu_available(status: &CriuStatus) -> Result<()> {
+    if status.available {
+        return Ok(());
+    }
+
+    bail!(
+        "criu is not available: {}",
+        status.error.as_deref().unwrap_or("unknown error")
+    );
+}
+
+fn run_criu(command: &[String]) -> Result<()> {
+    let Some((program, args)) = command.split_first() else {
+        bail!("empty CRIU command");
+    };
+    let output = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to execute {}", command.join(" ")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("{} failed: {}", command.join(" "), stderr.trim());
+    }
+
+    Ok(())
+}
+
+fn checkpoint_command(pid: i32, images_dir: &Path) -> Vec<String> {
+    vec![
+        "criu".to_string(),
+        "dump".to_string(),
+        "-t".to_string(),
+        pid.to_string(),
+        "-D".to_string(),
+        images_dir.display().to_string(),
+        "--shell-job".to_string(),
+        "--tcp-established".to_string(),
+        "--file-locks".to_string(),
+        "--leave-running".to_string(),
+    ]
+}
+
+fn restore_command(images_dir: &Path) -> Vec<String> {
+    vec![
+        "criu".to_string(),
+        "restore".to_string(),
+        "-D".to_string(),
+        images_dir.display().to_string(),
+        "--shell-job".to_string(),
+        "--tcp-established".to_string(),
+        "--file-locks".to_string(),
+        "-d".to_string(),
+    ]
+}
+
+fn default_checkpoint_dir(id: &str) -> PathBuf {
+    Path::new(DEFAULT_STATE_ROOT).join(id).join("checkpoint")
+}
+
+fn validate_checkpoint_id(id: &str) -> Result<()> {
+    if id.is_empty() {
+        bail!("container id must not be empty");
+    }
+
+    if !id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        bail!("container id may only contain ASCII letters, numbers, '.', '_' and '-'");
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_checkpoint_command_with_leave_running() {
+        let command = checkpoint_command(42, Path::new("/run/crun-rs/demo/checkpoint"));
+
+        assert_eq!(command[0], "criu");
+        assert!(command.contains(&"dump".to_string()));
+        assert!(command.contains(&"42".to_string()));
+        assert!(command.contains(&"--leave-running".to_string()));
+    }
+
+    #[test]
+    fn builds_restore_command_detached() {
+        let command = restore_command(Path::new("/run/crun-rs/demo/checkpoint"));
+
+        assert_eq!(command[0], "criu");
+        assert!(command.contains(&"restore".to_string()));
+        assert!(command.contains(&"-d".to_string()));
+    }
+
+    #[test]
+    fn rejects_invalid_checkpoint_ids() {
+        assert!(validate_checkpoint_id("").is_err());
+        assert!(validate_checkpoint_id("../demo").is_err());
+        assert!(validate_checkpoint_id("demo/one").is_err());
+        assert!(validate_checkpoint_id("demo_01.2-3").is_ok());
+    }
+}

@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::audit_log::{self, AuditEvent as RuntimeEvent};
 use container_runtime::cgroup::{read_stats, CgroupConfig};
+use container_runtime::checkpoint::{self, CheckpointOptions, RestoreOptions};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
@@ -186,6 +187,20 @@ enum Command {
         strace: bool,
         #[arg(long, default_value_t = 1000)]
         duration_ms: u64,
+    },
+    Checkpoint {
+        id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        images_dir: Option<PathBuf>,
+    },
+    Restore {
+        id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        images_dir: Option<PathBuf>,
     },
     Image {
         #[command(subcommand)]
@@ -430,6 +445,16 @@ fn main() -> Result<()> {
             strace,
             duration_ms,
         } => trace_container(&id, json, strace, duration_ms)?,
+        Command::Checkpoint {
+            id,
+            json,
+            images_dir,
+        } => checkpoint_container(&id, json, images_dir)?,
+        Command::Restore {
+            id,
+            json,
+            images_dir,
+        } => restore_container(&id, json, images_dir)?,
         Command::Image { command } => image_command(command)?,
         Command::RunImage {
             net,
@@ -568,6 +593,47 @@ fn print_process_node(node: &ProcessNode, depth: usize) {
     for child in &node.children {
         print_process_node(child, depth + 1);
     }
+}
+
+fn checkpoint_container(id: &str, json: bool, images_dir: Option<PathBuf>) -> Result<()> {
+    let report = checkpoint::checkpoint(id, CheckpointOptions { images_dir })?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("experimental: {}", report.experimental);
+    println!("id: {}", report.id);
+    println!("pid: {}", report.pid);
+    println!("images_dir: {}", report.images_dir);
+    println!("criu_available: {}", report.criu.available);
+    if let Some(version) = report.criu.version.as_deref() {
+        println!("criu_version: {version}");
+    }
+    println!("command: {}", report.command.join(" "));
+
+    Ok(())
+}
+
+fn restore_container(id: &str, json: bool, images_dir: Option<PathBuf>) -> Result<()> {
+    let report = checkpoint::restore(id, RestoreOptions { images_dir })?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("experimental: {}", report.experimental);
+    println!("id: {}", report.id);
+    println!("images_dir: {}", report.images_dir);
+    println!("criu_available: {}", report.criu.available);
+    if let Some(version) = report.criu.version.as_deref() {
+        println!("criu_version: {version}");
+    }
+    println!("command: {}", report.command.join(" "));
+
+    Ok(())
 }
 
 fn run_container(options: RunOptions) -> Result<()> {

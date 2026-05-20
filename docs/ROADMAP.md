@@ -217,10 +217,10 @@ sudo target/release/crun trace demo --json
 
 Objective: optional academic extension using CRIU.
 
-- [ ] Detect `criu` availability.
-- [ ] Add `crun checkpoint <id>`.
-- [ ] Add `crun restore <id>`.
-- [ ] Mark experimental in CLI output.
+- [x] Detect `criu` availability.
+- [x] Add `crun checkpoint <id>`.
+- [x] Add `crun restore <id>`.
+- [x] Mark experimental in CLI output.
 
 Pass:
 
