@@ -38,10 +38,10 @@ sudo target/release/crun delete smoke
 Objective: create repeatable root-only tests without making normal CI require
 root.
 
-- [ ] Add `tests/integration/root_runtime.rs`.
-- [ ] Mark tests `#[ignore]` or skip clearly when not root.
-- [ ] Cover run/state/delete, stats, logs, health, events, bind mount, and TTY.
-- [ ] Add `scripts/e2e.sh` for one-command local validation.
+- [x] Add `tests/integration/root_runtime.rs`.
+- [x] Mark tests `#[ignore]` or skip clearly when not root.
+- [x] Cover run/state/delete, stats, logs, health, events, bind mount, and TTY.
+- [x] Add `scripts/e2e.sh` for one-command local validation.
 
 Pass:
 
