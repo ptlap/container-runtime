@@ -157,6 +157,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Validate {
+        bundle: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     Debug {
         #[command(subcommand)]
         command: DebugCommand,
@@ -340,6 +345,7 @@ fn main() -> Result<()> {
         Command::Doctor { fix, json } => run_doctor(fix, json)?,
         Command::InspectSecurity { id, json } => inspect_security_command(&id, json)?,
         Command::Diff { id, json } => diff_rootfs(&id, json)?,
+        Command::Validate { bundle, json } => validate_bundle(&bundle, json)?,
         Command::Debug { command } => debug_command(command)?,
     }
 
@@ -487,6 +493,16 @@ fn execute_container(
             pids_limit: resources.pids.as_ref().and_then(|p| p.limit),
         })
     });
+    let masked_paths = config
+        .linux
+        .as_ref()
+        .map(|linux| linux.masked_paths.as_slice())
+        .unwrap_or(&[]);
+    let readonly_paths = config
+        .linux
+        .as_ref()
+        .map(|linux| linux.readonly_paths.as_slice())
+        .unwrap_or(&[]);
 
     let log_path = state::log_path(&id)?;
     let capture_logs = !options.tty && should_capture_logs(log_mode);
@@ -538,6 +554,10 @@ fn execute_container(
         overlay_config,
         readonly_rootfs: config.root.readonly,
         mounts: &config.mounts,
+        process_user: config.process.user.as_ref(),
+        rlimits: &config.process.rlimits,
+        masked_paths,
+        readonly_paths,
         log_path: capture_logs.then_some(log_path.as_path()),
         flags,
         cgroup_config,
@@ -1524,6 +1544,35 @@ fn diff_kind_label(kind: &RootfsDiffKind) -> &'static str {
         RootfsDiffKind::Modified => "modified",
         RootfsDiffKind::Deleted => "deleted",
     }
+}
+
+#[derive(Debug, Serialize)]
+struct ValidationReport {
+    bundle: String,
+    valid: bool,
+    warnings: Vec<String>,
+}
+
+fn validate_bundle(bundle: &Path, json: bool) -> Result<()> {
+    let config = load_config(bundle.join("config.json"))?;
+    let report = ValidationReport {
+        bundle: bundle.display().to_string(),
+        valid: true,
+        warnings: config.validation_warnings(),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("valid: {}", report.valid);
+    println!("bundle: {}", report.bundle);
+    for warning in &report.warnings {
+        println!("warning: {warning}");
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

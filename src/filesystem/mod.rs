@@ -117,6 +117,71 @@ pub fn setup_rootfs(rootfs: &Path, readonly: bool, mounts: &[Mount]) -> Result<(
     Ok(())
 }
 
+pub fn apply_oci_linux_paths(masked_paths: &[String], readonly_paths: &[String]) -> Result<()> {
+    for path in masked_paths {
+        mask_container_path(Path::new(path))?;
+    }
+    for path in readonly_paths {
+        make_container_path_readonly(Path::new(path))?;
+    }
+
+    Ok(())
+}
+
+fn mask_container_path(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    if path.is_dir() {
+        mount(
+            Some("tmpfs"),
+            path,
+            Some("tmpfs"),
+            MsFlags::MS_RDONLY | MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+            Some("size=0k"),
+        )
+        .with_context(|| format!("failed to mask directory path: {}", path.display()))?;
+    } else {
+        mount(
+            Some("/dev/null"),
+            path,
+            None::<&str>,
+            MsFlags::MS_BIND,
+            None::<&str>,
+        )
+        .with_context(|| format!("failed to mask file path: {}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn make_container_path_readonly(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    mount(
+        Some(path),
+        path,
+        None::<&str>,
+        MsFlags::MS_BIND | MsFlags::MS_REC,
+        None::<&str>,
+    )
+    .with_context(|| format!("failed to bind readonly path: {}", path.display()))?;
+
+    mount(
+        Some(path),
+        path,
+        None::<&str>,
+        MsFlags::MS_BIND | MsFlags::MS_REC | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+        None::<&str>,
+    )
+    .with_context(|| format!("failed to remount readonly path: {}", path.display()))?;
+
+    Ok(())
+}
+
 fn setup_mounts(rootfs: &Path, mounts: &[Mount]) -> Result<()> {
     for mount_config in mounts {
         setup_bind_mount(rootfs, mount_config)?;

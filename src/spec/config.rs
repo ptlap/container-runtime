@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use nix::libc;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
@@ -33,6 +34,64 @@ pub struct Process {
 
     #[serde(default)]
     pub cwd: Option<String>,
+
+    #[serde(default)]
+    pub user: Option<ProcessUser>,
+
+    #[serde(default)]
+    pub capabilities: Option<LinuxCapabilities>,
+
+    #[serde(default)]
+    pub rlimits: Vec<LinuxRlimit>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ProcessUser {
+    #[serde(default)]
+    pub uid: u32,
+
+    #[serde(default)]
+    pub gid: u32,
+
+    #[serde(default, rename = "additionalGids")]
+    pub additional_gids: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct LinuxCapabilities {
+    #[serde(default)]
+    pub bounding: Vec<String>,
+
+    #[serde(default)]
+    pub effective: Vec<String>,
+
+    #[serde(default)]
+    pub inheritable: Vec<String>,
+
+    #[serde(default)]
+    pub permitted: Vec<String>,
+
+    #[serde(default)]
+    pub ambient: Vec<String>,
+}
+
+impl LinuxCapabilities {
+    pub fn is_empty(&self) -> bool {
+        self.bounding.is_empty()
+            && self.effective.is_empty()
+            && self.inheritable.is_empty()
+            && self.permitted.is_empty()
+            && self.ambient.is_empty()
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LinuxRlimit {
+    #[serde(rename = "type")]
+    pub rlimit_type: String,
+
+    pub hard: u64,
+    pub soft: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +157,12 @@ pub struct Linux {
 
     #[serde(default)]
     pub resources: Option<LinuxResources>,
+
+    #[serde(default, rename = "maskedPaths")]
+    pub masked_paths: Vec<String>,
+
+    #[serde(default, rename = "readonlyPaths")]
+    pub readonly_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +232,18 @@ impl OciConfig {
             }
         }
 
+        for rlimit in &self.process.rlimits {
+            if rlimit.soft > rlimit.hard {
+                bail!(
+                    "process.rlimits {} soft limit must not exceed hard limit",
+                    rlimit.rlimit_type
+                );
+            }
+            if rlimit_resource(&rlimit.rlimit_type).is_none() {
+                bail!("unsupported process.rlimits type: {}", rlimit.rlimit_type);
+            }
+        }
+
         if let Some(overlay) = self.crun.as_ref().and_then(|crun| crun.overlay.as_ref()) {
             if overlay.enabled {
                 if overlay.upperdir.trim().is_empty() {
@@ -181,8 +258,64 @@ impl OciConfig {
             }
         }
 
+        if let Some(linux) = &self.linux {
+            for path in linux.masked_paths.iter().chain(linux.readonly_paths.iter()) {
+                validate_container_path(path)?;
+            }
+        }
+
         Ok(())
     }
+
+    pub fn validation_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self
+            .process
+            .capabilities
+            .as_ref()
+            .is_some_and(|capabilities| !capabilities.is_empty())
+        {
+            warnings.push(
+                "process.capabilities is parsed, but this runtime only enforces full capability drop through --security default".to_string(),
+            );
+        }
+        warnings
+    }
+}
+
+pub fn rlimit_resource(name: &str) -> Option<libc::__rlimit_resource_t> {
+    match name {
+        "RLIMIT_AS" => Some(libc::RLIMIT_AS),
+        "RLIMIT_CORE" => Some(libc::RLIMIT_CORE),
+        "RLIMIT_CPU" => Some(libc::RLIMIT_CPU),
+        "RLIMIT_FSIZE" => Some(libc::RLIMIT_FSIZE),
+        "RLIMIT_NOFILE" => Some(libc::RLIMIT_NOFILE),
+        "RLIMIT_NPROC" => Some(libc::RLIMIT_NPROC),
+        "RLIMIT_STACK" => Some(libc::RLIMIT_STACK),
+        _ => None,
+    }
+}
+
+fn validate_container_path(path: &str) -> Result<()> {
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        bail!(
+            "linux masked/readonly path must be absolute: {}",
+            path.display()
+        );
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::Prefix(_)
+        )
+    }) {
+        bail!(
+            "linux masked/readonly path must not escape root: {}",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 pub fn load_config<P: AsRef<Path>>(path: P) -> Result<OciConfig> {
@@ -344,6 +477,91 @@ mod tests {
         .expect_err("empty overlay paths should be rejected");
 
         assert!(error.to_string().contains("crun.overlay.upperdir"));
+    }
+
+    #[test]
+    fn parses_oci_user_capabilities_rlimits_and_paths() {
+        let config = parse_config(
+            r#"{
+                "process": {
+                    "args": ["/bin/sh"],
+                    "user": {
+                        "uid": 1000,
+                        "gid": 1000,
+                        "additionalGids": [10, 20]
+                    },
+                    "capabilities": {
+                        "effective": ["CAP_NET_BIND_SERVICE"]
+                    },
+                    "rlimits": [
+                        {
+                            "type": "RLIMIT_NOFILE",
+                            "soft": 64,
+                            "hard": 128
+                        }
+                    ]
+                },
+                "root": { "path": "rootfs" },
+                "linux": {
+                    "maskedPaths": ["/proc/kcore"],
+                    "readonlyPaths": ["/proc/sys"]
+                }
+            }"#,
+        )
+        .expect("OCI compatibility fields should parse");
+
+        let user = config.process.user.as_ref().expect("user should parse");
+        assert_eq!(user.uid, 1000);
+        assert_eq!(user.gid, 1000);
+        assert_eq!(user.additional_gids, [10, 20]);
+        assert_eq!(config.process.rlimits[0].rlimit_type, "RLIMIT_NOFILE");
+        assert_eq!(config.process.rlimits[0].soft, 64);
+        assert_eq!(config.process.rlimits[0].hard, 128);
+        assert_eq!(
+            config
+                .process
+                .capabilities
+                .as_ref()
+                .expect("capabilities should parse")
+                .effective,
+            ["CAP_NET_BIND_SERVICE"]
+        );
+        assert_eq!(
+            config
+                .linux
+                .as_ref()
+                .expect("linux should parse")
+                .masked_paths,
+            ["/proc/kcore"]
+        );
+        assert_eq!(config.validation_warnings().len(), 1);
+    }
+
+    #[test]
+    fn rejects_bad_oci_compatibility_fields() {
+        let rlimit_error = parse_config(
+            r#"{
+                "process": {
+                    "args": ["/bin/sh"],
+                    "rlimits": [
+                        { "type": "RLIMIT_NOFILE", "soft": 128, "hard": 64 }
+                    ]
+                },
+                "root": { "path": "rootfs" }
+            }"#,
+        )
+        .expect_err("soft rlimit greater than hard should be rejected");
+        assert!(rlimit_error.to_string().contains("soft limit"));
+
+        let path_error = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "linux": { "maskedPaths": ["proc/kcore"] }
+            }"#,
+        )
+        .expect_err("relative masked path should be rejected");
+        assert!(path_error.to_string().contains("must be absolute"));
     }
 
     #[test]

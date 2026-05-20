@@ -145,12 +145,12 @@ sudo target/release/crun delete health-demo
 
 Objective: support a clearer and larger OCI subset.
 
-- [ ] Add `crun validate <bundle>`.
-- [ ] Support `process.user`.
-- [ ] Support `process.capabilities`.
-- [ ] Support `process.rlimits`.
-- [ ] Support `linux.maskedPaths` and `linux.readonlyPaths`.
-- [ ] Document unsupported fields through validation warnings.
+- [x] Add `crun validate <bundle>`.
+- [x] Support `process.user`.
+- [x] Support `process.capabilities`.
+- [x] Support `process.rlimits`.
+- [x] Support `linux.maskedPaths` and `linux.readonlyPaths`.
+- [x] Document unsupported fields through validation warnings.
 
 Pass:
 

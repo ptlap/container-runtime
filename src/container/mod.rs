@@ -1,11 +1,11 @@
 use crate::cgroup::{Cgroup, CgroupConfig};
-use crate::filesystem::{setup_overlay_rootfs, setup_rootfs, OverlayConfig};
+use crate::filesystem::{apply_oci_linux_paths, setup_overlay_rootfs, setup_rootfs, OverlayConfig};
 use crate::network::{
     allocate_bridge_network, cleanup_nat, cleanup_veth_host, release_bridge_network,
     setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NetworkMode,
 };
 use crate::security::{self, SecurityProfile};
-use crate::spec::config::Mount;
+use crate::spec::config::{rlimit_resource, LinuxRlimit, Mount, ProcessUser};
 use crate::userns::{write_uid_gid_maps, UserNamespaceMode};
 use anyhow::{bail, Context, Result};
 use nix::libc;
@@ -40,6 +40,10 @@ pub struct ProcessConfig<'a> {
     pub overlay_config: Option<OverlayConfig>,
     pub readonly_rootfs: bool,
     pub mounts: &'a [Mount],
+    pub process_user: Option<&'a ProcessUser>,
+    pub rlimits: &'a [LinuxRlimit],
+    pub masked_paths: &'a [String],
+    pub readonly_paths: &'a [String],
     pub log_path: Option<&'a Path>,
     pub flags: CloneFlags,
     pub cgroup_config: Option<CgroupConfig>,
@@ -65,6 +69,10 @@ struct ChildConfig<'a> {
     overlay_config: Option<OverlayConfig>,
     readonly_rootfs: bool,
     mounts: &'a [Mount],
+    process_user: Option<&'a ProcessUser>,
+    rlimits: &'a [LinuxRlimit],
+    masked_paths: &'a [String],
+    readonly_paths: &'a [String],
     network_mode: NetworkMode,
     security_profile: SecurityProfile,
     userns_mode: UserNamespaceMode,
@@ -245,6 +253,10 @@ pub fn run_process(
                 overlay_config: config.overlay_config,
                 readonly_rootfs: config.readonly_rootfs,
                 mounts: config.mounts,
+                process_user: config.process_user,
+                rlimits: config.rlimits,
+                masked_paths: config.masked_paths,
+                readonly_paths: config.readonly_paths,
                 network_mode,
                 security_profile: config.security_profile,
                 userns_mode: config.userns_mode,
@@ -567,6 +579,7 @@ fn run_child(
     };
 
     setup_rootfs(rootfs, config.readonly_rootfs, config.mounts)?;
+    apply_oci_linux_paths(config.masked_paths, config.readonly_paths)?;
 
     if let Some(hostname) = config.hostname {
         set_container_hostname(hostname)?;
@@ -584,6 +597,9 @@ fn run_child(
 
     close(userns_ready_write_fd).ok();
     close(userns_mapped_read_fd).ok();
+
+    apply_rlimits(config.rlimits)?;
+    apply_process_user(config.process_user)?;
 
     security::apply(config.security_profile)?;
 
@@ -628,6 +644,59 @@ fn set_container_hostname(hostname: &str) -> Result<()> {
     if result < 0 {
         return Err(std::io::Error::last_os_error())
             .with_context(|| format!("failed to set hostname: {hostname}"));
+    }
+
+    Ok(())
+}
+
+fn apply_rlimits(rlimits: &[LinuxRlimit]) -> Result<()> {
+    for rlimit in rlimits {
+        let resource = rlimit_resource(&rlimit.rlimit_type)
+            .with_context(|| format!("unsupported rlimit type: {}", rlimit.rlimit_type))?;
+        let limit = libc::rlimit {
+            rlim_cur: rlimit.soft as libc::rlim_t,
+            rlim_max: rlimit.hard as libc::rlim_t,
+        };
+        let result = unsafe { libc::setrlimit(resource, &limit) };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("failed to set rlimit: {}", rlimit.rlimit_type));
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_process_user(user: Option<&ProcessUser>) -> Result<()> {
+    let Some(user) = user else {
+        return Ok(());
+    };
+
+    let groups = user
+        .additional_gids
+        .iter()
+        .map(|gid| *gid as libc::gid_t)
+        .collect::<Vec<_>>();
+    let groups_ptr = if groups.is_empty() {
+        std::ptr::null()
+    } else {
+        groups.as_ptr()
+    };
+    let setgroups_result = unsafe { libc::setgroups(groups.len(), groups_ptr) };
+    if setgroups_result < 0 {
+        return Err(std::io::Error::last_os_error()).context("failed to set additional groups");
+    }
+
+    let setgid_result = unsafe { libc::setgid(user.gid as libc::gid_t) };
+    if setgid_result < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("failed to set gid: {}", user.gid));
+    }
+
+    let setuid_result = unsafe { libc::setuid(user.uid as libc::uid_t) };
+    if setuid_result < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("failed to set uid: {}", user.uid));
     }
 
     Ok(())
