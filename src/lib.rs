@@ -1,3 +1,4 @@
+pub mod audit_log;
 pub mod cgroup;
 pub mod container;
 pub mod container_exec;

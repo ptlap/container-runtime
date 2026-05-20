@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use container_runtime::audit_log::{self, AuditEvent as RuntimeEvent};
 use container_runtime::cgroup::{read_stats, CgroupConfig};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
@@ -93,6 +94,8 @@ enum Command {
         id: String,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        history: bool,
         #[arg(long)]
         snapshot: bool,
         #[arg(long)]
@@ -313,10 +316,11 @@ fn main() -> Result<()> {
         Command::Events {
             id,
             json,
+            history,
             snapshot,
             once,
             interval_ms,
-        } => stream_events(&id, json, snapshot, once, interval_ms)?,
+        } => stream_events(&id, json, history, snapshot, once, interval_ms)?,
         Command::Health { id, json } => run_healthcheck(&id, json)?,
         Command::Ps { json } => list_containers(json)?,
         Command::Exec { tty, id, args } => exec_container(&id, &args, tty)?,
@@ -350,6 +354,9 @@ fn run_container(options: RunOptions) -> Result<()> {
         bail!("container id already exists: {}", options.id);
     }
 
+    audit_log::reset(&options.id)?;
+    audit_log::append_simple(&options.id, "lifecycle", "created", Some("created"))?;
+
     execute_container(options, None)
 }
 
@@ -381,6 +388,8 @@ fn create_container(options: RunOptions) -> Result<()> {
         },
     )?;
     state::save(&state)?;
+    audit_log::reset(&options.id)?;
+    audit_log::append_simple(&options.id, "lifecycle", "created", Some("created"))?;
     println!("created container: {}", options.id);
 
     Ok(())
@@ -505,6 +514,7 @@ fn execute_container(
             )?
         };
         state::save(&state)?;
+        audit_log::append_simple(&id, "lifecycle", "started", Some("running"))?;
         running_state = Some(state);
         Ok(())
     };
@@ -538,6 +548,11 @@ fn execute_container(
             .mark_stopped(exit_code, exit_signal.clone())
             .context("failed to update stopped state")?;
         state::save(&state)?;
+        let mut event = RuntimeEvent::new(&id, "lifecycle", "stopped").with_status("stopped");
+        if let Some(code) = exit_code.and_then(|code| u64::try_from(code).ok()) {
+            event = event.with_value(code);
+        }
+        audit_log::append(&event)?;
     }
 
     if let Some(error) = child_error {
@@ -794,19 +809,18 @@ fn show_stats(id: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct RuntimeEvent {
-    timestamp_unix: u64,
-    id: String,
-    source: String,
-    name: String,
-    value: Option<u64>,
-    delta: Option<u64>,
-    fields: Option<BTreeMap<String, u64>>,
-    status: Option<String>,
-}
+fn stream_events(
+    id: &str,
+    json: bool,
+    history: bool,
+    snapshot: bool,
+    once: bool,
+    interval_ms: u64,
+) -> Result<()> {
+    if history {
+        return show_event_history(id, json);
+    }
 
-fn stream_events(id: &str, json: bool, snapshot: bool, once: bool, interval_ms: u64) -> Result<()> {
     if interval_ms == 0 {
         bail!("events interval must be greater than zero");
     }
@@ -826,7 +840,7 @@ fn stream_events(id: &str, json: bool, snapshot: bool, once: bool, interval_ms: 
 
     let mut previous = EventSnapshot::from_stats(&read_stats(&cgroup_path)?);
     if snapshot {
-        print_event(snapshot_event(id, &previous), json)?;
+        print_event(snapshot_event(id, &previous), json, true)?;
     }
     if once {
         return Ok(());
@@ -840,17 +854,10 @@ fn stream_events(id: &str, json: bool, snapshot: bool, once: bool, interval_ms: 
         let state = state::load_current(id)?;
         if state.status != ContainerStatus::Running {
             print_event(
-                RuntimeEvent {
-                    timestamp_unix: unix_timestamp(),
-                    id: id.to_string(),
-                    source: "lifecycle".to_string(),
-                    name: "stopped".to_string(),
-                    value: None,
-                    delta: None,
-                    fields: None,
-                    status: Some(container_status_name(&state.status).to_string()),
-                },
+                RuntimeEvent::new(id, "lifecycle", "stopped")
+                    .with_status(container_status_name(&state.status)),
                 json,
+                true,
             )?;
             break;
         }
@@ -858,7 +865,7 @@ fn stream_events(id: &str, json: bool, snapshot: bool, once: bool, interval_ms: 
         let current_stats = read_stats(&cgroup_path)?;
         let current = EventSnapshot::from_stats(&current_stats);
         for event in collect_counter_events(id, &previous, &current) {
-            print_event(event, json)?;
+            print_event(event, json, true)?;
         }
         previous = current;
     }
@@ -904,16 +911,7 @@ impl EventSnapshot {
 }
 
 fn snapshot_event(id: &str, snapshot: &EventSnapshot) -> RuntimeEvent {
-    RuntimeEvent {
-        timestamp_unix: unix_timestamp(),
-        id: id.to_string(),
-        source: "cgroup".to_string(),
-        name: "snapshot".to_string(),
-        value: None,
-        delta: None,
-        fields: Some(snapshot.fields()),
-        status: None,
-    }
+    RuntimeEvent::new(id, "cgroup", "snapshot").with_fields(snapshot.fields())
 }
 
 fn collect_counter_events(
@@ -988,19 +986,12 @@ fn append_counter_events(
 }
 
 fn counter_event(id: &str, source: &str, name: &str, value: u64, delta: u64) -> RuntimeEvent {
-    RuntimeEvent {
-        timestamp_unix: unix_timestamp(),
-        id: id.to_string(),
-        source: source.to_string(),
-        name: name.to_string(),
-        value: Some(value),
-        delta: Some(delta),
-        fields: None,
-        status: None,
-    }
+    RuntimeEvent::new(id, source, name)
+        .with_value(value)
+        .with_delta(delta)
 }
 
-fn print_event(event: RuntimeEvent, json: bool) -> Result<()> {
+fn print_event(event: RuntimeEvent, json: bool, audit: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(&event)?);
     } else if let Some(status) = event.status.as_deref() {
@@ -1027,6 +1018,18 @@ fn print_event(event: RuntimeEvent, json: bool) -> Result<()> {
             event.value.unwrap_or(0),
             event.delta.unwrap_or(0)
         );
+    }
+
+    if audit {
+        audit_log::append(&event)?;
+    }
+
+    Ok(())
+}
+
+fn show_event_history(id: &str, json: bool) -> Result<()> {
+    for event in audit_log::read_history(id)? {
+        print_event(event, json, false)?;
     }
 
     Ok(())
@@ -1108,6 +1111,12 @@ fn run_healthcheck(id: &str, json: bool) -> Result<()> {
     };
     state.mark_health(health.clone())?;
     state::save(&state)?;
+    let mut event =
+        RuntimeEvent::new(id, "health", health.status.as_str()).with_status(health.status.as_str());
+    if let Some(code) = health.exit_code.and_then(|code| u64::try_from(code).ok()) {
+        event = event.with_value(code);
+    }
+    audit_log::append(&event)?;
 
     let result = HealthResult {
         id: id.to_string(),
@@ -1233,6 +1242,17 @@ fn exec_container(id: &str, args: &[String], tty: bool) -> Result<()> {
         (None, None) => println!("exec process ended without exit status"),
     }
 
+    let mut event = RuntimeEvent::new(id, "exec", "exec");
+    if let Some(code) = exit_code.and_then(|code| u64::try_from(code).ok()) {
+        event = event.with_value(code);
+    }
+    if exit_signal.is_some() {
+        event = event.with_status("signaled");
+    } else {
+        event = event.with_status("exited");
+    }
+    audit_log::append(&event)?;
+
     exit_with_process_status(exit_code, exit_signal.as_deref());
 }
 
@@ -1348,7 +1368,17 @@ fn wait_for_stopped(id: &str, timeout: Duration) -> Result<bool> {
 }
 
 fn delete_container(id: &str) -> Result<()> {
+    let container_state = state::load_current(id)?;
+    if container_state.status == ContainerStatus::Running {
+        bail!("container {id} is running; stop it before delete");
+    }
+
+    audit_log::append_simple(id, "lifecycle", "deleted", Some("deleted"))?;
+    let runtime_log = audit_log::read_raw(id).ok();
     state::delete(id)?;
+    if let Some(runtime_log) = runtime_log {
+        audit_log::write_raw(id, &runtime_log)?;
+    }
     println!("deleted container state: {id}");
     Ok(())
 }

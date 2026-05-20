@@ -232,6 +232,11 @@ pub fn log_path(id: &str) -> Result<PathBuf> {
     Ok(log_file(id))
 }
 
+pub fn runtime_log_path(id: &str) -> Result<PathBuf> {
+    validate_id(id)?;
+    Ok(runtime_log_file(id))
+}
+
 fn load_from(root: &Path, id: &str) -> Result<ContainerState> {
     validate_id(id)?;
     let path = state_file(root, id);
@@ -371,6 +376,10 @@ fn state_file(root: &Path, id: &str) -> PathBuf {
 
 fn log_file(id: &str) -> PathBuf {
     container_dir(Path::new(DEFAULT_STATE_ROOT), id).join("container.log")
+}
+
+fn runtime_log_file(id: &str) -> PathBuf {
+    container_dir(Path::new(DEFAULT_STATE_ROOT), id).join("runtime.log")
 }
 
 fn validate_id(id: &str) -> Result<()> {

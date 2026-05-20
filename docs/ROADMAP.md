@@ -109,10 +109,10 @@ sudo target/release/crun delete diff-demo
 
 Objective: persist lifecycle and runtime events for later inspection.
 
-- [ ] Write `/run/crun-rs/<id>/runtime.log`.
-- [ ] Log `created`, `started`, `exec`, `health`, `event`, `stopped`, `deleted`.
-- [ ] Add `crun events <id> --history`.
-- [ ] Use JSON lines internally for stable parsing.
+- [x] Write `/run/crun-rs/<id>/runtime.log`.
+- [x] Log `created`, `started`, `exec`, `health`, `event`, `stopped`, `deleted`.
+- [x] Add `crun events <id> --history`.
+- [x] Use JSON lines internally for stable parsing.
 
 Pass:
 
