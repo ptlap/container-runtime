@@ -3,6 +3,7 @@ pub mod container;
 pub mod container_exec;
 pub mod doctor;
 pub mod filesystem;
+pub mod inspect_security;
 pub mod namespace;
 pub mod network;
 pub mod security;

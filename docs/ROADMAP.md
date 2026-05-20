@@ -74,10 +74,10 @@ sudo target/release/crun ps
 
 Objective: make security posture visible and demo-friendly.
 
-- [ ] Add `crun inspect-security <id> [--json]`.
-- [ ] Report `NoNewPrivs`, seccomp mode, capabilities, userns mode.
-- [ ] Report readonly rootfs, mount mode, memory limit, pids limit, CPU limit.
-- [ ] Return warnings for weak posture: host userns, unconfined security, no limits.
+- [x] Add `crun inspect-security <id> [--json]`.
+- [x] Report `NoNewPrivs`, seccomp mode, capabilities, userns mode.
+- [x] Report readonly rootfs, mount mode, memory limit, pids limit, CPU limit.
+- [x] Return warnings for weak posture: host userns, unconfined security, no limits.
 
 Pass:
 

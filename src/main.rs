@@ -5,6 +5,7 @@ use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
 use container_runtime::filesystem::OverlayConfig;
+use container_runtime::inspect_security;
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::security::SecurityProfile;
@@ -135,6 +136,11 @@ enum Command {
     Doctor {
         #[arg(long)]
         fix: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    InspectSecurity {
+        id: String,
         #[arg(long)]
         json: bool,
     },
@@ -313,6 +319,7 @@ fn main() -> Result<()> {
         Command::Stop { id, timeout } => stop_container(&id, timeout)?,
         Command::Delete { id } => delete_container(&id)?,
         Command::Doctor { fix, json } => run_doctor(fix, json)?,
+        Command::InspectSecurity { id, json } => inspect_security_command(&id, json)?,
         Command::Debug { command } => debug_command(command)?,
     }
 
@@ -1363,6 +1370,54 @@ fn run_doctor(fix: bool, json: bool) -> Result<()> {
 
     if !report.is_clean() {
         bail!("doctor found unfixed issues");
+    }
+
+    Ok(())
+}
+
+fn inspect_security_command(id: &str, json: bool) -> Result<()> {
+    let inspection = inspect_security::inspect(id)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&inspection)?);
+        return Ok(());
+    }
+
+    println!("id: {}", inspection.id);
+    println!("pid: {}", inspection.pid);
+    println!("security_profile: {}", inspection.security_profile);
+    println!("userns_mode: {}", inspection.userns_mode);
+    println!("rootfs_mode: {}", inspection.rootfs_mode);
+    println!("readonly_rootfs: {}", inspection.readonly_rootfs);
+    println!("mount_count: {}", inspection.mount_count);
+    if let Some(value) = inspection.no_new_privs {
+        println!("no_new_privs: {value}");
+    }
+    if let Some(mode) = inspection.seccomp.mode {
+        println!("seccomp_mode: {mode}");
+    }
+    if let Some(filters) = inspection.seccomp.filters {
+        println!("seccomp_filters: {filters}");
+    }
+    if let Some(value) = inspection.capabilities.effective.as_deref() {
+        println!("cap_effective: {value}");
+    }
+    if let Some(value) = inspection.capabilities.permitted.as_deref() {
+        println!("cap_permitted: {value}");
+    }
+    if let Some(value) = inspection.resources.memory_limit.as_deref() {
+        println!("memory_limit: {value}");
+    }
+    if let Some(value) = inspection.resources.pids_limit.as_deref() {
+        println!("pids_limit: {value}");
+    }
+    if let Some(value) = inspection.resources.cpu_quota {
+        println!("cpu_quota: {value}");
+    }
+    if let Some(value) = inspection.resources.cpu_period {
+        println!("cpu_period: {value}");
+    }
+    for warning in &inspection.warnings {
+        println!("warning: {warning}");
     }
 
     Ok(())
