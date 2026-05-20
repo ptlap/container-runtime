@@ -91,10 +91,10 @@ sudo target/release/crun delete sec-demo
 
 Objective: show what changed inside an overlay-backed container.
 
-- [ ] Add `crun diff <id>`.
-- [ ] Read overlay `upperdir` from state or config.
-- [ ] Classify created, modified, and deleted whiteout entries.
-- [ ] Support text and JSON output.
+- [x] Add `crun diff <id>`.
+- [x] Read overlay `upperdir` from state or config.
+- [x] Classify created, modified, and deleted whiteout entries.
+- [x] Support text and JSON output.
 
 Pass:
 

@@ -8,6 +8,7 @@ use container_runtime::filesystem::OverlayConfig;
 use container_runtime::inspect_security;
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
+use container_runtime::rootfs_diff::{self, RootfsDiffKind};
 use container_runtime::security::SecurityProfile;
 use container_runtime::selfexec::{
     current_exe_link, ensure_reexecuted_from_memfd, is_running_from_memfd,
@@ -140,6 +141,11 @@ enum Command {
         json: bool,
     },
     InspectSecurity {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Diff {
         id: String,
         #[arg(long)]
         json: bool,
@@ -320,6 +326,7 @@ fn main() -> Result<()> {
         Command::Delete { id } => delete_container(&id)?,
         Command::Doctor { fix, json } => run_doctor(fix, json)?,
         Command::InspectSecurity { id, json } => inspect_security_command(&id, json)?,
+        Command::Diff { id, json } => diff_rootfs(&id, json)?,
         Command::Debug { command } => debug_command(command)?,
     }
 
@@ -1421,6 +1428,36 @@ fn inspect_security_command(id: &str, json: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn diff_rootfs(id: &str, json: bool) -> Result<()> {
+    let report = rootfs_diff::diff_container(id)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("id: {}", report.id);
+    println!("lowerdir: {}", report.lowerdir);
+    println!("upperdir: {}", report.upperdir);
+    if report.entries.is_empty() {
+        println!("no changes");
+        return Ok(());
+    }
+
+    for entry in &report.entries {
+        println!("{} {}", diff_kind_label(&entry.kind), entry.path);
+    }
+
+    Ok(())
+}
+
+fn diff_kind_label(kind: &RootfsDiffKind) -> &'static str {
+    match kind {
+        RootfsDiffKind::Created => "created",
+        RootfsDiffKind::Modified => "modified",
+        RootfsDiffKind::Deleted => "deleted",
+    }
 }
 
 #[cfg(test)]
