@@ -6,6 +6,7 @@ use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
 use container_runtime::filesystem::OverlayConfig;
+use container_runtime::image;
 use container_runtime::inspect_security;
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
@@ -62,6 +63,20 @@ enum Command {
         tty: bool,
         id: String,
         bundle: PathBuf,
+    },
+    RunImage {
+        #[arg(long, value_enum, default_value_t = CliNetworkMode::Bridge)]
+        net: CliNetworkMode,
+        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Default)]
+        security: CliSecurityProfile,
+        #[arg(long, value_enum, default_value_t = CliLogMode::Auto)]
+        log: CliLogMode,
+        #[arg(long, value_enum, default_value_t = CliUsernsMode::Host)]
+        userns: CliUsernsMode,
+        #[arg(short, long)]
+        tty: bool,
+        name: String,
+        id: String,
     },
     Create {
         #[arg(long, value_enum, default_value_t = CliNetworkMode::Bridge)]
@@ -162,9 +177,25 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Image {
+        #[command(subcommand)]
+        command: ImageCommand,
+    },
     Debug {
         #[command(subcommand)]
         command: DebugCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ImageCommand {
+    Import {
+        rootfs_tar: PathBuf,
+        name: String,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -282,6 +313,17 @@ struct RunOptions {
     tty: bool,
 }
 
+#[derive(Debug, Clone)]
+struct RunImageOptions {
+    name: String,
+    id: String,
+    network_mode: NetworkMode,
+    security_profile: SecurityProfile,
+    log_mode: LogMode,
+    userns_mode: UserNamespaceMode,
+    tty: bool,
+}
+
 fn init_logging(log_level: &str, log_format: &str) -> Result<()> {
     use tracing_subscriber::filter::EnvFilter;
 
@@ -372,10 +414,72 @@ fn main() -> Result<()> {
         Command::InspectSecurity { id, json } => inspect_security_command(&id, json)?,
         Command::Diff { id, json } => diff_rootfs(&id, json)?,
         Command::Validate { bundle, json } => validate_bundle(&bundle, json)?,
+        Command::Image { command } => image_command(command)?,
+        Command::RunImage {
+            net,
+            security,
+            log,
+            userns,
+            tty,
+            name,
+            id,
+        } => run_image(RunImageOptions {
+            name,
+            id,
+            network_mode: net.into(),
+            security_profile: security.into(),
+            log_mode: log.into(),
+            userns_mode: userns_mode_from_cli(userns)?,
+            tty,
+        })?,
         Command::Debug { command } => debug_command(command)?,
     }
 
     Ok(())
+}
+
+fn image_command(command: ImageCommand) -> Result<()> {
+    match command {
+        ImageCommand::Import { rootfs_tar, name } => import_image(&rootfs_tar, &name),
+        ImageCommand::List { json } => list_images(json),
+    }
+}
+
+fn import_image(rootfs_tar: &Path, name: &str) -> Result<()> {
+    let image = image::import(rootfs_tar, name)?;
+    println!("imported image: {}", image.name);
+    println!("path: {}", image.path);
+    println!("rootfs: {}", image.rootfs);
+    Ok(())
+}
+
+fn list_images(json: bool) -> Result<()> {
+    let images = image::list()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&images)?);
+        return Ok(());
+    }
+
+    println!("{:<24} {:<48} ROOTFS", "NAME", "PATH");
+    for image in images {
+        println!("{:<24} {:<48} {}", image.name, image.path, image.rootfs);
+    }
+
+    Ok(())
+}
+
+fn run_image(options: RunImageOptions) -> Result<()> {
+    let bundle = image::bundle_path(&options.name)?;
+    run_container(RunOptions {
+        id: options.id,
+        bundle,
+        network_mode: options.network_mode,
+        security_profile: options.security_profile,
+        log_mode: options.log_mode,
+        userns_mode: options.userns_mode,
+        tty: options.tty,
+    })
 }
 
 fn debug_command(command: DebugCommand) -> Result<()> {

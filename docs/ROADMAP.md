@@ -183,11 +183,11 @@ sudo target/release/crun delete restricted-demo
 
 Objective: move from rootfs-only input to minimal local image storage.
 
-- [ ] Add `crun image import <rootfs.tar> <name>`.
-- [ ] Store under `/var/lib/crun-rs/images/<name>/rootfs`.
-- [ ] Add `crun image list`.
-- [ ] Add `crun run-image <name> <id>`.
-- [ ] Keep registry/pull out of scope.
+- [x] Add `crun image import <rootfs.tar> <name>`.
+- [x] Store under `/var/lib/crun-rs/images/<name>/rootfs`.
+- [x] Add `crun image list`.
+- [x] Add `crun run-image <name> <id>`.
+- [x] Keep registry/pull out of scope.
 
 Pass:
 
