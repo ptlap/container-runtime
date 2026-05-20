@@ -14,4 +14,5 @@ pub mod selfexec;
 pub mod signal;
 pub mod spec;
 pub mod state;
+pub mod trace;
 pub mod userns;

@@ -202,10 +202,10 @@ sudo target/release/crun delete image-demo
 
 Objective: expose kernel/process behavior during runtime operations.
 
-- [ ] Add `crun trace <id>`.
-- [ ] Start with process tree and `/proc/<pid>/status`.
-- [ ] Add optional `strace` integration if installed.
-- [ ] Keep eBPF as optional research extension.
+- [x] Add `crun trace <id>`.
+- [x] Start with process tree and `/proc/<pid>/status`.
+- [x] Add optional `strace` integration if installed.
+- [x] Keep eBPF as optional research extension.
 
 Pass:
 

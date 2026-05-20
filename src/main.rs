@@ -20,6 +20,7 @@ use container_runtime::spec::config::{load_config, Healthcheck};
 use container_runtime::state::{
     self, ContainerState, ContainerStatus, HealthState, RuntimeMetadata, StartedResources,
 };
+use container_runtime::trace::{self, ProcessNode, TraceOptions, TraceReport};
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
 use nix::sched::CloneFlags;
 use serde::Serialize;
@@ -176,6 +177,15 @@ enum Command {
         bundle: PathBuf,
         #[arg(long)]
         json: bool,
+    },
+    Trace {
+        id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        strace: bool,
+        #[arg(long, default_value_t = 1000)]
+        duration_ms: u64,
     },
     Image {
         #[command(subcommand)]
@@ -414,6 +424,12 @@ fn main() -> Result<()> {
         Command::InspectSecurity { id, json } => inspect_security_command(&id, json)?,
         Command::Diff { id, json } => diff_rootfs(&id, json)?,
         Command::Validate { bundle, json } => validate_bundle(&bundle, json)?,
+        Command::Trace {
+            id,
+            json,
+            strace,
+            duration_ms,
+        } => trace_container(&id, json, strace, duration_ms)?,
         Command::Image { command } => image_command(command)?,
         Command::RunImage {
             net,
@@ -492,6 +508,66 @@ fn debug_self_exec() -> Result<()> {
     println!("exe: {}", current_exe_link()?.display());
     println!("running_from_memfd: {}", is_running_from_memfd()?);
     Ok(())
+}
+
+fn trace_container(id: &str, json: bool, strace: bool, duration_ms: u64) -> Result<()> {
+    if duration_ms == 0 {
+        bail!("trace duration must be greater than zero");
+    }
+
+    let report = trace::trace(
+        id,
+        TraceOptions {
+            strace,
+            strace_duration: Duration::from_millis(duration_ms),
+        },
+    )?;
+    print_trace_report(&report, json)
+}
+
+fn print_trace_report(report: &TraceReport, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(report)?);
+        return Ok(());
+    }
+
+    println!("id: {}", report.id);
+    println!("pid: {}", report.pid);
+    println!("runtime_status: {}", report.runtime_status);
+    if let Some(name) = report.proc_status.get("Name") {
+        println!("process_name: {name}");
+    }
+    if let Some(state) = report.proc_status.get("State") {
+        println!("process_state: {state}");
+    }
+    if let Some(nnp) = report.proc_status.get("NoNewPrivs") {
+        println!("no_new_privs: {nnp}");
+    }
+    println!("process_tree:");
+    print_process_node(&report.process_tree, 0);
+    println!("strace_available: {}", report.strace.available);
+    println!("strace_requested: {}", report.strace.requested);
+    if let Some(duration_ms) = report.strace.duration_ms {
+        println!("strace_duration_ms: {duration_ms}");
+    }
+    if let Some(summary) = report.strace.summary.as_deref() {
+        println!("strace_summary:");
+        println!("{summary}");
+    }
+    if let Some(error) = report.strace.error.as_deref() {
+        println!("strace_error: {error}");
+    }
+    println!("ebpf: {}", report.ebpf);
+
+    Ok(())
+}
+
+fn print_process_node(node: &ProcessNode, depth: usize) {
+    let indent = "  ".repeat(depth);
+    println!("{indent}- {} {}", node.pid, node.command);
+    for child in &node.children {
+        print_process_node(child, depth + 1);
+    }
 }
 
 fn run_container(options: RunOptions) -> Result<()> {
