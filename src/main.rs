@@ -1212,17 +1212,7 @@ fn stop_container(id: &str, timeout_secs: u64) -> Result<()> {
 }
 
 fn delete_container(id: &str) -> Result<()> {
-    let container_state = state::load_current(id)?;
-    if container_state.status == ContainerStatus::Running {
-        bail!("container {id} is running; stop it before delete");
-    }
-
-    audit_log::append_simple(id, "lifecycle", "deleted", Some("deleted"))?;
-    let runtime_log = audit_log::read_raw(id).ok();
-    state::delete(id)?;
-    if let Some(runtime_log) = runtime_log {
-        audit_log::write_raw(id, &runtime_log)?;
-    }
+    lifecycle::delete(id)?;
     println!("deleted container state: {id}");
     Ok(())
 }

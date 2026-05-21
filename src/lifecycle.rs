@@ -131,6 +131,17 @@ pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
     Ok(report)
 }
 
+pub fn delete(id: &str) -> Result<()> {
+    audit_log::append_simple(id, "lifecycle", "deleted", Some("deleted"))?;
+    let runtime_log = audit_log::read_raw(id).ok();
+    state::delete(id)?;
+    if let Some(runtime_log) = runtime_log {
+        audit_log::write_raw(id, &runtime_log)?;
+    }
+
+    Ok(())
+}
+
 fn audit_exec(id: &str, report: &ExecReport) -> Result<()> {
     let mut event = AuditEvent::new(id, "exec", "exec");
     if let Some(code) = report.code.and_then(|code| u64::try_from(code).ok()) {
@@ -222,5 +233,19 @@ mod tests {
             signal: Some("SIGTERM".to_string()),
         };
         assert_eq!(signaled.signal.as_deref(), Some("SIGTERM"));
+    }
+
+    #[test]
+    fn kill_report_keeps_signal_details() {
+        let report = KillReport {
+            id: "demo".to_string(),
+            pid: 42,
+            signal: "SIGTERM".to_string(),
+            signal_number: 15,
+        };
+
+        assert_eq!(report.id, "demo");
+        assert_eq!(report.pid, 42);
+        assert_eq!(report.signal_number, 15);
     }
 }
