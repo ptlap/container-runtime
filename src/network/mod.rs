@@ -1,3 +1,4 @@
+use crate::error::NetworkError;
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
@@ -156,11 +157,11 @@ fn next_free_bridge_octet(allocations: &BridgeAllocations) -> Result<u8> {
         }
     }
 
-    anyhow::bail!(
-        "no bridge subnets available in 10.88.{}.0/24..10.88.{}.0/24",
-        BRIDGE_OCTET_START,
-        BRIDGE_OCTET_END
-    );
+    Err(NetworkError::NoBridgeSubnetsAvailable {
+        start: BRIDGE_OCTET_START,
+        end: BRIDGE_OCTET_END,
+    }
+    .into())
 }
 
 fn read_allocations(root: &Path) -> Result<BridgeAllocations> {
@@ -372,7 +373,11 @@ fn run_ip(args: &[&str]) -> Result<()> {
         .with_context(|| format!("failed to execute ip {}", args.join(" ")))?;
 
     if !status.success() {
-        anyhow::bail!("ip command failed: {}", args.join(" "));
+        return Err(NetworkError::CommandFailed {
+            program: "ip",
+            args: args.join(" "),
+        }
+        .into());
     }
 
     Ok(())
@@ -387,7 +392,11 @@ fn run_ip_quiet(args: &[&str]) -> Result<()> {
         .with_context(|| format!("failed to execute ip {}", args.join(" ")))?;
 
     if !status.success() {
-        anyhow::bail!("ip command failed: {}", args.join(" "));
+        return Err(NetworkError::CommandFailed {
+            program: "ip",
+            args: args.join(" "),
+        }
+        .into());
     }
 
     Ok(())
@@ -435,7 +444,11 @@ fn run_iptables(args: &[&str]) -> Result<()> {
         .with_context(|| format!("failed to execute iptables {}", args.join(" ")))?;
 
     if !status.success() {
-        anyhow::bail!("iptables command failed: {}", args.join(" "));
+        return Err(NetworkError::CommandFailed {
+            program: "iptables",
+            args: args.join(" "),
+        }
+        .into());
     }
 
     Ok(())
@@ -450,7 +463,11 @@ fn run_iptables_quiet(args: &[&str]) -> Result<()> {
         .with_context(|| format!("failed to execute iptables {}", args.join(" ")))?;
 
     if !status.success() {
-        anyhow::bail!("iptables command failed: {}", args.join(" "));
+        return Err(NetworkError::CommandFailed {
+            program: "iptables",
+            args: args.join(" "),
+        }
+        .into());
     }
 
     Ok(())
@@ -520,6 +537,28 @@ mod tests {
         assert_eq!(third.subnet, "10.88.20.0/24");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rejects_bridge_allocation_when_subnet_pool_is_exhausted() {
+        let allocations = BridgeAllocations {
+            containers: (BRIDGE_OCTET_START..=BRIDGE_OCTET_END)
+                .map(|octet| (format!("container-{octet}"), octet))
+                .collect(),
+        };
+
+        let error = next_free_bridge_octet(&allocations).expect_err("pool should be exhausted");
+        let network_error = error
+            .downcast_ref::<NetworkError>()
+            .expect("error should be typed");
+
+        assert!(matches!(
+            network_error,
+            NetworkError::NoBridgeSubnetsAvailable {
+                start: BRIDGE_OCTET_START,
+                end: BRIDGE_OCTET_END
+            }
+        ));
     }
 
     #[test]

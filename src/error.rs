@@ -80,3 +80,12 @@ pub enum StateError {
     #[error("container id may only contain ASCII letters, numbers, '.', '_' and '-'")]
     InvalidContainerId,
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum NetworkError {
+    #[error("no bridge subnets available in 10.88.{start}.0/24..10.88.{end}.0/24")]
+    NoBridgeSubnetsAvailable { start: u8, end: u8 },
+
+    #[error("{program} command failed: {args}")]
+    CommandFailed { program: &'static str, args: String },
+}
