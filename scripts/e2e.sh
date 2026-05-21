@@ -90,7 +90,7 @@ cleanup_ids+=("$observe_id")
 observe_bundle="$tmp_root/observe"
 write_bundle "$observe_bundle" '["/bin/sh", "-c", "echo log-ok; sleep 60"]' ',
   "healthcheck": { "test": ["CMD", "/bin/sh", "-c", "test -f /etc/resolv.conf"], "retries": 1 }'
-"$runtime" run --net none --security unconfined "$observe_id" "$observe_bundle" >/tmp/crun-e2e-run.log 2>&1 &
+"$runtime" run --net none --security unconfined --log on "$observe_id" "$observe_bundle" >/tmp/crun-e2e-run.log 2>&1 &
 runner_pid=$!
 wait_running "$observe_id"
 "$runtime" stats "$observe_id" --json | grep -q '"memory"'

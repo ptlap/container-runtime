@@ -34,6 +34,13 @@ fn has_tty() -> bool {
     unsafe { libc::isatty(libc::STDIN_FILENO) == 1 && libc::isatty(libc::STDOUT_FILENO) == 1 }
 }
 
+fn has_command(name: &str) -> bool {
+    Command::new(name)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 fn unique_name(prefix: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -148,6 +155,8 @@ impl RunningContainer {
                 "none",
                 "--security",
                 "unconfined",
+                "--log",
+                "on",
                 id.as_str(),
             ])
             .arg(bundle)
@@ -307,25 +316,32 @@ fn tty_run_works_when_terminal_is_available() {
     if !require_root() {
         return;
     }
-    if !has_tty() {
-        eprintln!("skipping tty test: stdin/stdout are not a tty");
+    if !has_tty() || !has_command("script") {
+        eprintln!("skipping tty test: requires an interactive tty and script(1)");
         return;
     }
 
     let id = unique_name("root-tty");
     let bundle = TestBundle::new("bundle-tty", &["/bin/sh", "-c", "echo tty-ok"], "")
         .expect("bundle should be created");
-    let output = run_crun(&[
-        "run",
-        "-t",
-        "--net",
-        "none",
-        "--security",
-        "unconfined",
-        &id,
-        bundle.path.to_str().expect("bundle path should be utf8"),
-    ]);
+    let output_path = std::env::temp_dir().join(unique_name("crun-tty"));
+    let command = format!(
+        "{} run -t --net none --security unconfined {} {}",
+        crun().display(),
+        id,
+        bundle.path.display()
+    );
+    let output = Command::new("script")
+        .args([
+            "-qfec",
+            &command,
+            output_path.to_str().expect("output path should be utf8"),
+        ])
+        .output()
+        .expect("failed to execute script");
     assert_success(&output);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("tty-ok"));
+    let tty_output = fs::read_to_string(&output_path).expect("tty output should be readable");
+    assert!(tty_output.contains("tty-ok"));
     assert_success(&run_crun(&["delete", &id]));
+    let _ = fs::remove_file(output_path);
 }
