@@ -5,6 +5,9 @@ pub enum ContainerError {
     #[error("process args is empty")]
     EmptyProcessArgs,
 
+    #[error("exec args is empty")]
+    EmptyExecArgs,
+
     #[error("missing required process config field: {field}")]
     MissingProcessConfigField { field: &'static str },
 

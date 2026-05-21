@@ -1,8 +1,9 @@
 use crate::container::pty::{
     proxy_pty, register_sigwinch, unregister_sigwinch, PtyManager, RawTerminalGuard,
 };
+use crate::error::ContainerError;
 use crate::fd::set_cloexec;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use libc;
 use nix::sched::{setns, CloneFlags};
 use nix::sys::wait::{waitpid, WaitStatus};
@@ -39,7 +40,7 @@ pub struct ExecExit {
 
 pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
     if config.args.is_empty() {
-        bail!("exec args is empty");
+        return Err(ContainerError::EmptyExecArgs.into());
     }
 
     let mut pty_manager = if config.tty {
@@ -114,7 +115,7 @@ fn run_namespace_helper(config: ExecConfig<'_>, pty_manager: Option<PtyManager>)
     match unsafe { fork() }.context("failed to fork exec process")? {
         ForkResult::Child => {
             if let Some(pty) = pty_manager.as_ref() {
-                let slave_fd = pty.slave_fd().context("pty slave is closed")?;
+                let slave_fd = pty.slave_fd().context(ContainerError::PtySlaveClosed)?;
                 setsid().context("failed to setsid for exec process")?;
                 unsafe {
                     if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) == -1 {
@@ -230,4 +231,28 @@ pub fn add_to_cgroup(cgroup_path: &str, pid: Pid) -> Result<()> {
             .context("failed to add exec helper to cgroup")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_empty_exec_args_with_typed_error() {
+        let config = ExecConfig {
+            target_pid: 1,
+            args: &[],
+            env: &[],
+            cwd: None,
+            cgroup_path: None,
+            tty: false,
+        };
+
+        let error = exec_in_container(config).expect_err("empty exec args should be rejected");
+        let container_error = error
+            .downcast_ref::<ContainerError>()
+            .expect("error should be typed");
+
+        assert!(matches!(container_error, ContainerError::EmptyExecArgs));
+    }
 }
