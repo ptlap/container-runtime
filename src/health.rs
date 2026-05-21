@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde::Serialize;
 use std::path::Path;
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::audit_log::{self, AuditEvent};
@@ -120,6 +122,31 @@ pub fn run_once(id: &str) -> Result<HealthResult> {
     })
 }
 
+pub fn run(
+    id: &str,
+    watch: bool,
+    interval: Duration,
+    mut emit: impl FnMut(HealthResult) -> Result<()>,
+) -> Result<()> {
+    if interval.is_zero() {
+        return Err(HealthRunError::InvalidInterval.into());
+    }
+
+    if watch {
+        loop {
+            let state = state::load_current(id)?;
+            if state.status != ContainerStatus::Running {
+                return Ok(());
+            }
+
+            emit(run_once(id)?)?;
+            thread::sleep(interval);
+        }
+    }
+
+    emit(run_once(id)?)
+}
+
 fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -216,5 +243,16 @@ mod tests {
 
         assert_eq!(attempts(&default_retries), 1);
         assert_eq!(attempts(&configured_retries), 4);
+    }
+
+    #[test]
+    fn rejects_zero_health_interval_with_typed_error() {
+        let error = run("demo", false, Duration::ZERO, |_| Ok(()))
+            .expect_err("zero interval should be rejected");
+
+        assert!(matches!(
+            error.downcast_ref::<HealthRunError>(),
+            Some(HealthRunError::InvalidInterval)
+        ));
     }
 }

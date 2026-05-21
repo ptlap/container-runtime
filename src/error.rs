@@ -140,6 +140,9 @@ pub enum HealthcheckError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum HealthRunError {
+    #[error("health interval must be greater than zero")]
+    InvalidInterval,
+
     #[error("container {id} is not running")]
     ContainerNotRunning { id: String },
 

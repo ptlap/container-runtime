@@ -26,9 +26,7 @@ use container_runtime::selfexec::{
 };
 use container_runtime::signal::DEFAULT_SIGNAL;
 use container_runtime::spec::config::load_config;
-use container_runtime::state::{
-    self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources,
-};
+use container_runtime::state::{self, ContainerState, RuntimeMetadata, StartedResources};
 use container_runtime::trace::{self, ProcessNode, TraceOptions, TraceReport};
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
 use serde::Serialize;
@@ -1013,26 +1011,9 @@ fn show_event_history(id: &str, json: bool) -> Result<()> {
 }
 
 fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: u64) -> Result<()> {
-    if interval_ms == 0 {
-        bail!("health interval must be greater than zero");
-    }
-
-    if watch {
-        let interval = Duration::from_millis(interval_ms);
-        loop {
-            let state = state::load_current(id)?;
-            if state.status != ContainerStatus::Running {
-                return Ok(());
-            }
-
-            let result = health::run_once(id)?;
-            print_health_result(&result, json)?;
-            thread::sleep(interval);
-        }
-    }
-
-    let result = health::run_once(id)?;
-    print_health_result(&result, json)
+    health::run(id, watch, Duration::from_millis(interval_ms), |result| {
+        print_health_result(&result, json)
+    })
 }
 
 fn print_health_result(result: &HealthResult, json: bool) -> Result<()> {
