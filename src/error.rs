@@ -50,3 +50,12 @@ pub enum OciConfigError {
     #[error("linux masked/readonly path must not escape root: {path}")]
     LinuxPathEscapesRoot { path: String },
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CgroupError {
+    #[error("memory_limit must be greater than zero, got {value}")]
+    InvalidMemoryLimit { value: i64 },
+
+    #[error("pids_limit must be greater than zero, got {value}")]
+    InvalidPidsLimit { value: i64 },
+}

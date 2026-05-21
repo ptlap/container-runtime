@@ -1,3 +1,4 @@
+use crate::error::CgroupError;
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
 use serde::Serialize;
@@ -13,6 +14,26 @@ pub struct CgroupConfig {
     pub cpu_quota: Option<i64>,
     pub cpu_period: Option<u64>,
     pub pids_limit: Option<i64>,
+}
+
+impl CgroupConfig {
+    pub fn validate(&self) -> std::result::Result<(), CgroupError> {
+        if let Some(memory_limit) = self.memory_limit {
+            if memory_limit <= 0 {
+                return Err(CgroupError::InvalidMemoryLimit {
+                    value: memory_limit,
+                });
+            }
+        }
+
+        if let Some(pids_limit) = self.pids_limit {
+            if pids_limit <= 0 {
+                return Err(CgroupError::InvalidPidsLimit { value: pids_limit });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -76,6 +97,8 @@ pub struct IoDeviceStats {
 
 impl Cgroup {
     pub fn new(id: &str, config: &CgroupConfig) -> Result<Self> {
+        config.validate()?;
+
         let root = Path::new(CGROUP_ROOT);
 
         fs::create_dir_all(root).context("failed to create cgroup root")?;
@@ -89,9 +112,6 @@ impl Cgroup {
         fs::create_dir_all(&path).context("failed to create container cgroup")?;
 
         if let Some(memory_limit) = config.memory_limit {
-            if memory_limit <= 0 {
-                anyhow::bail!("memory_limit must > 0, got {memory_limit}");
-            }
             fs::write(path.join("memory.max"), memory_limit.to_string())
                 .context("failed to write memory.max")?;
         }
@@ -103,9 +123,6 @@ impl Cgroup {
         }
 
         if let Some(pids_limit) = config.pids_limit {
-            if pids_limit <= 0 {
-                anyhow::bail!("pids_limit must > 0, got {pids_limit}");
-            }
             fs::write(path.join("pids.max"), pids_limit.to_string())
                 .context("failed to write pids.max")?;
         }
@@ -369,5 +386,36 @@ mod tests {
         assert_eq!(stats[0].wios, Some(2));
         assert_eq!(stats[1].device, "259:0");
         assert_eq!(stats[1].raw.get("unknown"), Some(&99));
+    }
+
+    #[test]
+    fn rejects_invalid_cgroup_limits_with_typed_errors() {
+        let memory_error = CgroupConfig {
+            memory_limit: Some(0),
+            cpu_quota: None,
+            cpu_period: None,
+            pids_limit: None,
+        }
+        .validate()
+        .expect_err("zero memory limit should be rejected");
+
+        assert!(matches!(
+            memory_error,
+            CgroupError::InvalidMemoryLimit { value: 0 }
+        ));
+
+        let pids_error = CgroupConfig {
+            memory_limit: None,
+            cpu_quota: None,
+            cpu_period: None,
+            pids_limit: Some(-1),
+        }
+        .validate()
+        .expect_err("negative pids limit should be rejected");
+
+        assert!(matches!(
+            pids_error,
+            CgroupError::InvalidPidsLimit { value: -1 }
+        ));
     }
 }
