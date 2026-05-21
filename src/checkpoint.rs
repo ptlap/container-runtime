@@ -195,6 +195,8 @@ fn checkpoint_command(pid: i32, images_dir: &Path) -> Vec<String> {
         "--manage-cgroups=ignore".to_string(),
         "--skip-mnt".to_string(),
         "/sys".to_string(),
+        "--skip-mnt".to_string(),
+        "./sys".to_string(),
         "--leave-running".to_string(),
     ]
 }
@@ -212,6 +214,8 @@ fn restore_command(images_dir: &Path) -> Vec<String> {
         "--mntns-compat-mode".to_string(),
         "--skip-mnt".to_string(),
         "/sys".to_string(),
+        "--skip-mnt".to_string(),
+        "./sys".to_string(),
         "-d".to_string(),
     ]
 }
@@ -248,6 +252,7 @@ mod tests {
         assert!(command.contains(&"42".to_string()));
         assert!(command.contains(&"--manage-cgroups=ignore".to_string()));
         assert!(command.contains(&"/sys".to_string()));
+        assert!(command.contains(&"./sys".to_string()));
         assert!(command.contains(&"--leave-running".to_string()));
     }
 
@@ -260,6 +265,7 @@ mod tests {
         assert!(command.contains(&"--mntns-compat-mode".to_string()));
         assert!(command.contains(&"--manage-cgroups=ignore".to_string()));
         assert!(command.contains(&"/sys".to_string()));
+        assert!(command.contains(&"./sys".to_string()));
         assert!(command.contains(&"-d".to_string()));
     }
 
