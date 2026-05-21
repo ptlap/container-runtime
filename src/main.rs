@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::audit_log::{self, AuditEvent as RuntimeEvent};
 use container_runtime::cgroup::{read_stats, CgroupConfig};
 use container_runtime::checkpoint::{self, CheckpointOptions, RestoreOptions};
+use container_runtime::cli_runtime::{process_exit_status, should_capture_logs};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
@@ -757,7 +758,7 @@ fn execute_container(
         .unwrap_or(&[]);
 
     let log_path = state::log_path(&id)?;
-    let capture_logs = !options.tty && should_capture_logs(log_mode);
+    let capture_logs = !options.tty && should_capture_logs(log_mode, io::stdin().is_terminal());
     let mut running_state = None;
     let mut save_started_state = |started: container_runtime::container::StartedProcess| {
         let cgroup_path = started
@@ -1395,24 +1396,6 @@ fn exit_with_process_status(code: Option<i32>, signal: Option<&str>) -> ! {
     std::process::exit(process_exit_status(code, signal));
 }
 
-fn process_exit_status(code: Option<i32>, signal: Option<&str>) -> i32 {
-    match (code, signal) {
-        (Some(code), _) if (0..=255).contains(&code) => code,
-        (Some(code), _) if code < 0 => 1,
-        (Some(_), _) => 255,
-        (None, Some(_)) => 128,
-        (None, None) => 1,
-    }
-}
-
-fn should_capture_logs(log_mode: LogMode) -> bool {
-    match log_mode {
-        LogMode::Auto => !io::stdin().is_terminal(),
-        LogMode::On => true,
-        LogMode::Off => false,
-    }
-}
-
 fn show_logs(id: &str, follow: bool) -> Result<()> {
     let state = state::load_current(id)?;
     let log_path = state
@@ -1652,33 +1635,4 @@ fn validate_bundle(bundle: &Path, json: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn maps_process_exit_code_to_cli_status() {
-        assert_eq!(process_exit_status(Some(0), None), 0);
-        assert_eq!(process_exit_status(Some(42), None), 42);
-    }
-
-    #[test]
-    fn clamps_process_exit_code_to_shell_range() {
-        assert_eq!(process_exit_status(Some(300), None), 255);
-        assert_eq!(process_exit_status(Some(-1), None), 1);
-    }
-
-    #[test]
-    fn maps_signal_and_missing_status_to_nonzero_cli_status() {
-        assert_eq!(process_exit_status(None, Some("SIGKILL")), 128);
-        assert_eq!(process_exit_status(None, None), 1);
-    }
-
-    #[test]
-    fn does_not_capture_logs_for_interactive_shell() {
-        assert!(should_capture_logs(LogMode::On));
-        assert!(!should_capture_logs(LogMode::Off));
-    }
 }
