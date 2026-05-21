@@ -1,6 +1,7 @@
 use crate::container::pty::{
     proxy_pty, register_sigwinch, unregister_sigwinch, PtyManager, RawTerminalGuard,
 };
+use crate::fd::set_cloexec;
 use anyhow::{bail, Context, Result};
 use libc;
 use nix::sched::{setns, CloneFlags};
@@ -169,6 +170,7 @@ fn join_namespaces(target_pid: i32) -> Result<()> {
         let path = format!("/proc/{target_pid}/ns/{namespace}");
         let file =
             File::open(&path).with_context(|| format!("failed to open namespace: {path}"))?;
+        set_cloexec(&file).with_context(|| format!("failed to mark namespace CLOEXEC: {path}"))?;
         namespace_files.push((path, file, flag));
     }
 

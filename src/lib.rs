@@ -5,6 +5,7 @@ pub mod container;
 pub mod container_exec;
 pub mod doctor;
 pub mod error;
+mod fd;
 pub mod filesystem;
 pub mod image;
 pub mod inspect_security;

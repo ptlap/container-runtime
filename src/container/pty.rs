@@ -1,3 +1,4 @@
+use crate::fd::set_cloexec;
 use libc;
 use nix::pty::{openpty, OpenptyResult};
 use nix::sys::termios::{tcgetattr, tcsetattr, SetArg, Termios};
@@ -14,6 +15,8 @@ pub struct PtyManager {
 impl PtyManager {
     pub fn new() -> io::Result<Self> {
         let OpenptyResult { master, slave } = openpty(None, None).map_err(io::Error::other)?;
+        set_cloexec(&master).map_err(io::Error::other)?;
+        set_cloexec(&slave).map_err(io::Error::other)?;
         Ok(Self {
             master,
             slave: Some(slave),

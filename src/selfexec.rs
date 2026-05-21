@@ -1,3 +1,4 @@
+use crate::fd::set_cloexec;
 use anyhow::{bail, Context, Result};
 use nix::libc;
 use std::ffi::CString;
@@ -18,6 +19,7 @@ pub fn ensure_reexecuted_from_memfd() -> Result<()> {
     }
 
     let mut source = File::open("/proc/self/exe").context("failed to open /proc/self/exe")?;
+    set_cloexec(&source).context("failed to mark /proc/self/exe CLOEXEC")?;
     let mut sealed_exe = create_memfd("crun-rs-self")?;
     io::copy(&mut source, &mut sealed_exe).context("failed to copy self binary into memfd")?;
     sealed_exe
