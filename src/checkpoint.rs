@@ -192,6 +192,8 @@ fn checkpoint_command(pid: i32, images_dir: &Path) -> Vec<String> {
         "--shell-job".to_string(),
         "--tcp-established".to_string(),
         "--file-locks".to_string(),
+        "--manage-cgroups".to_string(),
+        "ignore".to_string(),
         "--leave-running".to_string(),
     ]
 }
@@ -205,6 +207,9 @@ fn restore_command(images_dir: &Path) -> Vec<String> {
         "--shell-job".to_string(),
         "--tcp-established".to_string(),
         "--file-locks".to_string(),
+        "--manage-cgroups".to_string(),
+        "ignore".to_string(),
+        "--mntns-compat-mode".to_string(),
         "-d".to_string(),
     ]
 }
@@ -239,6 +244,7 @@ mod tests {
         assert_eq!(command[0], "criu");
         assert!(command.contains(&"dump".to_string()));
         assert!(command.contains(&"42".to_string()));
+        assert!(command.contains(&"ignore".to_string()));
         assert!(command.contains(&"--leave-running".to_string()));
     }
 
@@ -248,6 +254,8 @@ mod tests {
 
         assert_eq!(command[0], "criu");
         assert!(command.contains(&"restore".to_string()));
+        assert!(command.contains(&"--mntns-compat-mode".to_string()));
+        assert!(command.contains(&"ignore".to_string()));
         assert!(command.contains(&"-d".to_string()));
     }
 
