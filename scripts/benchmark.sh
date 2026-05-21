@@ -111,6 +111,8 @@ if [[ -z "$output" ]]; then
     output="/tmp/crun-benchmark-${timestamp}.csv"
   fi
 fi
+echo "benchmark output: $output" >&2
+echo "benchmark iterations: $iterations net=$net security=$security" >&2
 
 tmp_bundle="$(mktemp -d /tmp/crun-bench-bundle.XXXXXX)"
 results_tmp="$(mktemp /tmp/crun-bench-results.XXXXXX)"
@@ -234,6 +236,7 @@ for i in $(seq 1 "$iterations"); do
   container_rss=0
   status=1
 
+  echo "benchmark iteration $i/$iterations: start $id" >&2
   start_ns="$(now_ns)"
   "$runtime" run --net "$net" --security "$security" "$id" "$tmp_bundle" >/dev/null 2>&1 &
   run_pid=$!
@@ -263,6 +266,7 @@ for i in $(seq 1 "$iterations"); do
   "$runtime" delete "$id" >/dev/null 2>&1 || true
 
   append_result "$i" "$startup_ms" "$exec_ms" "$runtime_rss" "$container_rss" "$status"
+  echo "benchmark iteration $i/$iterations: startup=${startup_ms}ms exec=${exec_ms}ms status=$status" >&2
 
   if [[ "$status" -eq 0 ]]; then
     ok=$((ok + 1))
