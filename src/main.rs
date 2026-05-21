@@ -17,7 +17,7 @@ use container_runtime::inspect_security;
 use container_runtime::modes::{
     parse_log_mode, parse_network_mode, parse_security_profile, LogMode,
 };
-use container_runtime::namespace::namespace_flags;
+use container_runtime::namespace::effective_namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::policy::{self, PolicyProfile};
 use container_runtime::rootfs_diff::{self, RootfsDiffKind};
@@ -32,7 +32,6 @@ use container_runtime::state::{
 };
 use container_runtime::trace::{self, ProcessNode, TraceOptions, TraceReport};
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
-use nix::sched::CloneFlags;
 use serde::Serialize;
 use std::borrow::Cow;
 use std::io::IsTerminal;
@@ -720,15 +719,12 @@ fn execute_container(
             linux
                 .namespaces
                 .iter()
-                .map(|ns| ns.namespace_type.clone())
+                .map(|ns| ns.namespace_type.as_str())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
 
-    let flags = apply_userns_mode(
-        apply_network_mode(namespace_flags(&namespaces), network_mode),
-        userns_mode,
-    );
+    let flags = effective_namespace_flags(&namespaces, network_mode, userns_mode);
 
     println!("namespaces: {:?}", namespaces);
     println!("clone flags: {:?}", flags);
@@ -933,24 +929,6 @@ fn show_state(id: &str, json: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn apply_network_mode(mut flags: CloneFlags, network_mode: NetworkMode) -> CloneFlags {
-    match network_mode {
-        NetworkMode::Host => flags.remove(CloneFlags::CLONE_NEWNET),
-        NetworkMode::None | NetworkMode::Bridge => flags.insert(CloneFlags::CLONE_NEWNET),
-    }
-
-    flags
-}
-
-fn apply_userns_mode(mut flags: CloneFlags, userns_mode: UserNamespaceMode) -> CloneFlags {
-    match userns_mode {
-        UserNamespaceMode::Host => flags.remove(CloneFlags::CLONE_NEWUSER),
-        UserNamespaceMode::Private(_) => flags.insert(CloneFlags::CLONE_NEWUSER),
-    }
-
-    flags
 }
 
 fn show_stats(id: &str, json: bool) -> Result<()> {

@@ -1,10 +1,12 @@
+use crate::network::NetworkMode;
+use crate::userns::UserNamespaceMode;
 use nix::sched::CloneFlags;
 
-pub fn namespace_flags(namespaces: &[String]) -> CloneFlags {
+pub fn namespace_flags<S: AsRef<str>>(namespaces: &[S]) -> CloneFlags {
     let mut flags = CloneFlags::empty();
 
     for namespace in namespaces {
-        match namespace.as_str() {
+        match namespace.as_ref() {
             "pid" => flags |= CloneFlags::CLONE_NEWPID,
             "mount" => flags |= CloneFlags::CLONE_NEWNS,
             "uts" => flags |= CloneFlags::CLONE_NEWUTS,
@@ -13,6 +15,34 @@ pub fn namespace_flags(namespaces: &[String]) -> CloneFlags {
             "user" => flags |= CloneFlags::CLONE_NEWUSER,
             _ => {}
         }
+    }
+
+    flags
+}
+
+pub fn effective_namespace_flags<S: AsRef<str>>(
+    namespaces: &[S],
+    network_mode: NetworkMode,
+    userns_mode: UserNamespaceMode,
+) -> CloneFlags {
+    let flags = namespace_flags(namespaces);
+    let flags = apply_network_mode(flags, network_mode);
+    apply_userns_mode(flags, userns_mode)
+}
+
+fn apply_network_mode(mut flags: CloneFlags, network_mode: NetworkMode) -> CloneFlags {
+    match network_mode {
+        NetworkMode::Host => flags.remove(CloneFlags::CLONE_NEWNET),
+        NetworkMode::None | NetworkMode::Bridge => flags.insert(CloneFlags::CLONE_NEWNET),
+    }
+
+    flags
+}
+
+fn apply_userns_mode(mut flags: CloneFlags, userns_mode: UserNamespaceMode) -> CloneFlags {
+    match userns_mode {
+        UserNamespaceMode::Host => flags.remove(CloneFlags::CLONE_NEWUSER),
+        UserNamespaceMode::Private(_) => flags.insert(CloneFlags::CLONE_NEWUSER),
     }
 
     flags
@@ -44,5 +74,31 @@ mod tests {
 
         assert!(flags.contains(CloneFlags::CLONE_NEWPID));
         assert!(!flags.contains(CloneFlags::CLONE_NEWNS));
+    }
+
+    #[test]
+    fn applies_runtime_network_and_user_namespace_modes() {
+        let flags = effective_namespace_flags(
+            &names(&["pid", "network", "user"]),
+            NetworkMode::Host,
+            UserNamespaceMode::Host,
+        );
+
+        assert!(flags.contains(CloneFlags::CLONE_NEWPID));
+        assert!(!flags.contains(CloneFlags::CLONE_NEWNET));
+        assert!(!flags.contains(CloneFlags::CLONE_NEWUSER));
+
+        let flags = effective_namespace_flags(
+            &names(&["pid"]),
+            NetworkMode::None,
+            UserNamespaceMode::Private(crate::userns::UserNamespaceMap {
+                host_uid: 1000,
+                host_gid: 1000,
+            }),
+        );
+
+        assert!(flags.contains(CloneFlags::CLONE_NEWPID));
+        assert!(flags.contains(CloneFlags::CLONE_NEWNET));
+        assert!(flags.contains(CloneFlags::CLONE_NEWUSER));
     }
 }
