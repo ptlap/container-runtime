@@ -239,8 +239,11 @@ pub fn run_process(
                     }
                 }
             } else if let Some(log_write_fd) = log_write_fd.take() {
+                setsid().context("failed to setsid for container process")?;
                 redirect_stdio_to_log(&log_write_fd)?;
                 close(log_write_fd).ok();
+            } else {
+                setsid().context("failed to setsid for container process")?;
             }
 
             let is_root = nix::unistd::getuid().is_root();
