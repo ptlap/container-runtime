@@ -1,6 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use nix::errno::Errno;
 use nix::libc;
+
+use crate::error::SignalError;
 
 pub const DEFAULT_SIGNAL: &str = "SIGTERM";
 
@@ -12,7 +14,10 @@ pub fn parse_signal(value: &str) -> Result<i32> {
         if signal > 0 {
             return Ok(signal);
         }
-        bail!("signal number must be positive: {value}");
+        return Err(SignalError::NonPositiveSignal {
+            value: value.to_string(),
+        }
+        .into());
     }
 
     match name {
@@ -25,7 +30,10 @@ pub fn parse_signal(value: &str) -> Result<i32> {
         "USR2" => Ok(libc::SIGUSR2),
         "STOP" => Ok(libc::SIGSTOP),
         "CONT" => Ok(libc::SIGCONT),
-        _ => bail!("unsupported signal: {value}"),
+        _ => Err(SignalError::UnsupportedSignal {
+            value: value.to_string(),
+        }
+        .into()),
     }
 }
 
@@ -52,6 +60,25 @@ mod tests {
     #[test]
     fn parses_numeric_signals() {
         assert_eq!(parse_signal("15").expect("number"), 15);
-        assert!(parse_signal("0").is_err());
+    }
+
+    #[test]
+    fn rejects_non_positive_signal_with_typed_error() {
+        let error = parse_signal("0").expect_err("zero signal should be rejected");
+
+        assert!(matches!(
+            error.downcast_ref::<SignalError>(),
+            Some(SignalError::NonPositiveSignal { value }) if value == "0"
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_signal_with_typed_error() {
+        let error = parse_signal("SIGBOGUS").expect_err("unknown signal should be rejected");
+
+        assert!(matches!(
+            error.downcast_ref::<SignalError>(),
+            Some(SignalError::UnsupportedSignal { value }) if value == "SIGBOGUS"
+        ));
     }
 }

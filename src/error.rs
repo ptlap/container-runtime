@@ -134,3 +134,12 @@ pub enum FilesystemError {
     #[error("bind mount destination exists but is a directory: {path}")]
     BindDestinationIsDirectory { path: String },
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SignalError {
+    #[error("signal number must be positive: {value}")]
+    NonPositiveSignal { value: String },
+
+    #[error("unsupported signal: {value}")]
+    UnsupportedSignal { value: String },
+}
