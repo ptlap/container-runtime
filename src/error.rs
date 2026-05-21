@@ -49,6 +49,15 @@ pub enum ContainerError {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum LifecycleError {
+    #[error("container id already exists: {id}")]
+    ContainerAlreadyExists { id: String },
+
+    #[error("container {id} is not created")]
+    ContainerNotCreated { id: String },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum OciConfigError {
     #[error("process.args must not be empty")]
     EmptyProcessArgs,

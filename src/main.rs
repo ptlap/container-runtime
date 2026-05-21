@@ -12,6 +12,7 @@ use container_runtime::filesystem::resolve_rootfs;
 use container_runtime::health::{self, HealthResult};
 use container_runtime::image;
 use container_runtime::inspect_security;
+use container_runtime::lifecycle::{self, CreateOptions};
 use container_runtime::modes::{
     parse_log_mode, parse_network_mode, parse_security_profile, LogMode,
 };
@@ -600,59 +601,27 @@ fn restore_container(id: &str, json: bool, images_dir: Option<PathBuf>) -> Resul
 }
 
 fn run_container(options: RunOptions) -> Result<()> {
-    if state::exists(&options.id)? {
-        bail!("container id already exists: {}", options.id);
-    }
-
-    audit_log::reset(&options.id)?;
-    audit_log::append_simple(&options.id, "lifecycle", "created", Some("created"))?;
-
+    lifecycle::record_run_created(&options.id)?;
     execute_container(options, None)
 }
 
 fn create_container(options: RunOptions) -> Result<()> {
-    if state::exists(&options.id)? {
-        bail!("container id already exists: {}", options.id);
-    }
-
-    let config = load_config(options.bundle.join("config.json"))?;
-    let effective_policy = policy::resolve_effective_policy(
-        config.crun.as_ref(),
-        config
-            .linux
-            .as_ref()
-            .and_then(|linux| linux.resources.as_ref()),
-        options.security_profile,
-        options.log_mode,
-    )?;
-    let rootfs_mode = resolve_rootfs(&options.bundle, &config.root.path, config.crun.as_ref()).mode;
-
-    let state = ContainerState::created(
-        &options.id,
-        &options.bundle,
-        RuntimeMetadata {
-            network_mode: options.network_mode.as_str(),
-            security_profile: effective_policy.security_profile.as_str(),
-            log_mode: effective_policy.log_mode.as_str(),
-            userns_mode: options.userns_mode.as_str(),
-            rootfs_mode: rootfs_mode.as_str(),
-            policy_profile: effective_policy.profile.as_str(),
-            tty: options.tty,
-        },
-    )?;
-    state::save(&state)?;
-    audit_log::reset(&options.id)?;
-    audit_log::append_simple(&options.id, "lifecycle", "created", Some("created"))?;
+    lifecycle::create(CreateOptions {
+        id: &options.id,
+        bundle: &options.bundle,
+        network_mode: options.network_mode,
+        security_profile: options.security_profile,
+        log_mode: options.log_mode,
+        userns_mode: options.userns_mode,
+        tty: options.tty,
+    })?;
     println!("created container: {}", options.id);
 
     Ok(())
 }
 
 fn start_container(id: &str) -> Result<()> {
-    let state = state::load_current(id)?;
-    if state.status != ContainerStatus::Created {
-        bail!("container {id} is not created");
-    }
+    let state = lifecycle::load_created(id)?;
 
     let options = RunOptions {
         id: state.id.clone(),
