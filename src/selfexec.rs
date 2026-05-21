@@ -1,5 +1,6 @@
+use crate::error::ContainerError;
 use crate::fd::set_cloexec;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use nix::libc;
 use std::ffi::CString;
 use std::fs::File;
@@ -72,7 +73,7 @@ fn reexec_from_memfd(fd: i32) -> Result<()> {
         return Err(io::Error::last_os_error()).context("failed to re-exec from sealed memfd");
     }
 
-    bail!("execve returned unexpectedly")
+    Err(ContainerError::ExecveReturned.into())
 }
 
 fn cstring_args() -> Result<Vec<CString>> {

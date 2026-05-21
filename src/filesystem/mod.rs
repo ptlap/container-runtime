@@ -51,10 +51,10 @@ pub fn resolve_bundle_path(bundle: &Path, path: &str) -> PathBuf {
 
 pub fn setup_overlay_rootfs(config: &OverlayConfig) -> Result<PathBuf> {
     if !config.lowerdir.exists() {
-        anyhow::bail!(
-            "overlay lowerdir does not exist: {}",
-            config.lowerdir.display()
-        );
+        return Err(FilesystemError::OverlayLowerdirDoesNotExist {
+            path: config.lowerdir.display().to_string(),
+        }
+        .into());
     }
 
     fs::create_dir_all(&config.upperdir).with_context(|| {

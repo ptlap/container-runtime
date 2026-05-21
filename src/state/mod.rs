@@ -1,6 +1,6 @@
 use crate::error::StateError;
 use crate::network::release_bridge_network;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
@@ -389,7 +389,7 @@ fn save_to(root: &Path, state: &ContainerState) -> Result<()> {
 fn delete_from(root: &Path, id: &str) -> Result<()> {
     let state = load_current_from(root, id)?;
     if state.status == ContainerStatus::Running {
-        bail!("container {id} is running; stop it before delete");
+        return Err(StateError::ContainerIsRunning { id: id.to_string() }.into());
     }
 
     release_state_network_allocation(&state);

@@ -203,7 +203,7 @@ fn acquire_allocation_lock(root: &Path) -> Result<AllocationLock> {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 remove_stale_allocation_lock(&path)?;
                 if Instant::now() >= deadline {
-                    anyhow::bail!("timed out waiting for network allocation lock");
+                    return Err(NetworkError::LockTimeout.into());
                 }
                 thread::sleep(Duration::from_millis(10));
             }

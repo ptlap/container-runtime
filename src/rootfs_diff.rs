@@ -1,7 +1,8 @@
+use crate::error::FilesystemError;
 use crate::filesystem::resolve_bundle_path;
 use crate::spec::config::load_config;
 use crate::state;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -48,10 +49,16 @@ pub fn diff_container(id: &str) -> Result<RootfsDiffReport> {
     let upperdir = resolve_bundle_path(&bundle, &overlay.upperdir);
 
     if !lowerdir.exists() {
-        bail!("overlay lowerdir does not exist: {}", lowerdir.display());
+        return Err(FilesystemError::OverlayLowerdirDoesNotExist {
+            path: lowerdir.display().to_string(),
+        }
+        .into());
     }
     if !upperdir.exists() {
-        bail!("overlay upperdir does not exist: {}", upperdir.display());
+        return Err(FilesystemError::OverlayUpperdirDoesNotExist {
+            path: upperdir.display().to_string(),
+        }
+        .into());
     }
 
     let entries = diff_overlay_dirs(&lowerdir, &upperdir)?;

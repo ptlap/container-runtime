@@ -1,7 +1,8 @@
 use crate::cgroup::read_stats;
+use crate::error::InspectSecurityError;
 use crate::spec::config::{load_config, OciConfig};
 use crate::state::{self, ContainerStatus};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
@@ -59,10 +60,10 @@ struct ProcSecurityStatus {
 pub fn inspect(id: &str) -> Result<SecurityInspection> {
     let state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
-        bail!("container {id} is not running");
+        return Err(InspectSecurityError::ContainerNotRunning { id: id.to_string() }.into());
     }
     let Some(pid) = state.pid else {
-        bail!("container {id} has no pid");
+        return Err(InspectSecurityError::ContainerHasNoPid { id: id.to_string() }.into());
     };
 
     let config_path = Path::new(&state.bundle).join("config.json");

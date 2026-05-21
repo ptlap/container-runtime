@@ -13,6 +13,27 @@ pub enum ContainerError {
 
     #[error("pty slave is closed")]
     PtySlaveClosed,
+
+    #[error("execve returned unexpectedly")]
+    ExecveReturned,
+
+    #[error("log helper exited with code: {code}")]
+    LogHelperExited { code: i32 },
+
+    #[error("log helper killed by signal: {signal}")]
+    LogHelperKilled { signal: String },
+
+    #[error("log helper ended with status: {status}")]
+    LogHelperStatus { status: String },
+
+    #[error("failed to write fd: wrote zero bytes")]
+    WriteZeroBytes,
+
+    #[error("child exited before user namespace was ready")]
+    ChildExitedBeforeUsernsReady,
+
+    #[error("parent exited before user namespace was mapped")]
+    ParentExitedBeforeUsernsMapped,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -82,6 +103,9 @@ pub enum StateError {
 
     #[error("container id may only contain ASCII letters, numbers, '.', '_' and '-'")]
     InvalidContainerId,
+
+    #[error("container {id} is running; stop it before delete")]
+    ContainerIsRunning { id: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -91,6 +115,9 @@ pub enum NetworkError {
 
     #[error("{program} command failed: {args}")]
     CommandFailed { program: &'static str, args: String },
+
+    #[error("timed out waiting for network allocation lock")]
+    LockTimeout,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -133,6 +160,12 @@ pub enum FilesystemError {
 
     #[error("bind mount destination exists but is a directory: {path}")]
     BindDestinationIsDirectory { path: String },
+
+    #[error("overlay lowerdir does not exist: {path}")]
+    OverlayLowerdirDoesNotExist { path: String },
+
+    #[error("overlay upperdir does not exist: {path}")]
+    OverlayUpperdirDoesNotExist { path: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -190,4 +223,28 @@ pub enum CheckpointError {
 
     #[error("CRIU command {command} failed: {stderr}")]
     CriuCommandFailed { command: String, stderr: String },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SecurityError {
+    #[error("seccomp is not supported on this host CPU architecture")]
+    UnsupportedArchitecture,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum InspectSecurityError {
+    #[error("container {id} is not running")]
+    ContainerNotRunning { id: String },
+
+    #[error("container {id} has no pid")]
+    ContainerHasNoPid { id: String },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum TraceError {
+    #[error("container {id} is not running")]
+    ContainerNotRunning { id: String },
+
+    #[error("running container state has no pid")]
+    ContainerHasNoPid,
 }

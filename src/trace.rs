@@ -1,5 +1,6 @@
+use crate::error::TraceError;
 use crate::state::{self, ContainerStatus};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -45,12 +46,10 @@ pub struct StraceReport {
 pub fn trace(id: &str, options: TraceOptions) -> Result<TraceReport> {
     let container_state = state::load_current(id)?;
     if container_state.status != ContainerStatus::Running {
-        bail!("container {id} is not running");
+        return Err(TraceError::ContainerNotRunning { id: id.to_string() }.into());
     }
 
-    let pid = container_state
-        .pid
-        .context("running container state has no pid")?;
+    let pid = container_state.pid.ok_or(TraceError::ContainerHasNoPid)?;
     let proc_status = read_proc_status(pid)?;
     let process_tree = collect_process_tree(pid)?;
     let strace_available = command_available("strace");

@@ -1,3 +1,4 @@
+use crate::error::SecurityError;
 use anyhow::{Context, Result};
 use nix::errno::Errno;
 use nix::libc;
@@ -90,7 +91,7 @@ fn empty_capability_data() -> [CapUserData; CAPABILITY_U32S] {
 
 fn install_seccomp_filter() -> Result<()> {
     if AUDIT_ARCH_LOCAL == 0 {
-        anyhow::bail!("seccomp is not supported on this host CPU architecture");
+        return Err(SecurityError::UnsupportedArchitecture.into());
     }
 
     let mut filter = seccomp_denylist_filter();

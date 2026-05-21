@@ -8,7 +8,7 @@ use crate::network::{
 use crate::security::{self, SecurityProfile};
 use crate::spec::config::{rlimit_resource, LinuxRlimit, Mount, ProcessUser};
 use crate::userns::{write_uid_gid_maps, UserNamespaceMode};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use nix::fcntl::OFlag;
 use nix::libc;
 use nix::mount::{mount, MsFlags};
@@ -865,9 +865,15 @@ fn wait_for_log_helper(log_helper: Option<nix::unistd::Pid>) -> Result<()> {
 
     match waitpid(log_helper, None).context("failed to wait for log helper")? {
         WaitStatus::Exited(_, 0) => Ok(()),
-        WaitStatus::Exited(_, code) => bail!("log helper exited with code: {code}"),
-        WaitStatus::Signaled(_, signal, _) => bail!("log helper killed by signal: {signal:?}"),
-        other => bail!("log helper ended with status: {other:?}"),
+        WaitStatus::Exited(_, code) => Err(ContainerError::LogHelperExited { code }.into()),
+        WaitStatus::Signaled(_, signal, _) => Err(ContainerError::LogHelperKilled {
+            signal: format!("{signal:?}"),
+        }
+        .into()),
+        other => Err(ContainerError::LogHelperStatus {
+            status: format!("{other:?}"),
+        }
+        .into()),
     }
 }
 
@@ -880,7 +886,7 @@ fn write_all(fd: &OwnedFd, mut bytes: &[u8]) -> Result<()> {
     while !bytes.is_empty() {
         let count = write(fd, bytes).context("failed to write fd")?;
         if count == 0 {
-            bail!("failed to write fd: wrote zero bytes");
+            return Err(ContainerError::WriteZeroBytes.into());
         }
         bytes = &bytes[count..];
     }
@@ -989,7 +995,7 @@ fn wait_for_userns_ready(read_fd: &OwnedFd) -> Result<()> {
     let mut buf = [0u8; 1];
     let count = read(read_fd, &mut buf).context("failed to wait for child user namespace")?;
     if count == 0 {
-        bail!("child exited before user namespace was ready");
+        return Err(ContainerError::ChildExitedBeforeUsernsReady.into());
     }
 
     Ok(())
@@ -999,7 +1005,7 @@ fn wait_for_userns_mapped(read_fd: &OwnedFd) -> Result<()> {
     let mut buf = [0u8; 1];
     let count = read(read_fd, &mut buf).context("failed to wait for user namespace mapping")?;
     if count == 0 {
-        bail!("parent exited before user namespace was mapped");
+        return Err(ContainerError::ParentExitedBeforeUsernsMapped.into());
     }
 
     Ok(())
