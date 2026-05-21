@@ -4,8 +4,11 @@ use std::io;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static ROOT_RUNTIME_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn crun() -> PathBuf {
     std::env::var_os("CARGO_BIN_EXE_crun")
@@ -28,6 +31,12 @@ fn require_root() -> bool {
         eprintln!("skipping root runtime test: requires root");
         false
     }
+}
+
+fn root_runtime_test_lock() -> MutexGuard<'static, ()> {
+    ROOT_RUNTIME_TEST_LOCK
+        .lock()
+        .expect("root runtime test lock should not be poisoned")
 }
 
 fn has_tty() -> bool {
@@ -196,6 +205,7 @@ fn run_state_delete_smoke() {
     if !require_root() {
         return;
     }
+    let _guard = root_runtime_test_lock();
 
     let id = unique_name("root-run");
     let bundle = TestBundle::new("bundle-run", &["/bin/sh", "-c", "exit 0"], "")
@@ -224,6 +234,7 @@ fn stats_events_health_and_logs_work() {
     if !require_root() {
         return;
     }
+    let _guard = root_runtime_test_lock();
 
     let id = unique_name("root-observe");
     let bundle = TestBundle::new(
@@ -269,6 +280,7 @@ fn bind_mount_readonly_works() {
     if !require_root() {
         return;
     }
+    let _guard = root_runtime_test_lock();
 
     let id = unique_name("root-mount");
     let shared = std::env::temp_dir().join(unique_name("shared"));
@@ -320,6 +332,7 @@ fn tty_run_works_when_terminal_is_available() {
         eprintln!("skipping tty test: requires an interactive tty and script(1)");
         return;
     }
+    let _guard = root_runtime_test_lock();
 
     let id = unique_name("root-tty");
     let bundle = TestBundle::new("bundle-tty", &["/bin/sh", "-c", "echo tty-ok"], "")
