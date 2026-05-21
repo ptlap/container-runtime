@@ -419,7 +419,11 @@ pub fn setup_nat(subnet: &str) -> Result<()> {
         "MASQUERADE",
     ])?;
 
-    run_iptables(&["-P", "FORWARD", "ACCEPT"])?;
+    run_iptables_quiet(&["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"]).ok();
+    run_iptables_quiet(&["-D", "FORWARD", "-d", subnet, "-j", "ACCEPT"]).ok();
+
+    run_iptables(&["-A", "FORWARD", "-s", subnet, "-j", "ACCEPT"])?;
+    run_iptables(&["-A", "FORWARD", "-d", subnet, "-j", "ACCEPT"])?;
 
     Ok(())
 }
@@ -465,6 +469,9 @@ pub fn cleanup_nat(subnet: &str) -> Result<()> {
     ])
     .is_ok()
     {}
+
+    while run_iptables_quiet(&["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"]).is_ok() {}
+    while run_iptables_quiet(&["-D", "FORWARD", "-d", subnet, "-j", "ACCEPT"]).is_ok() {}
 
     Ok(())
 }

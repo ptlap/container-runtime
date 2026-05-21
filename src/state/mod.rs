@@ -306,6 +306,7 @@ fn refresh_liveness(root: &Path, state: &mut ContainerState) -> Result<()> {
     }
 
     let Some(pid) = state.pid else {
+        cleanup_stale_resources(state);
         release_state_network_allocation(state);
         state.mark_stopped(None, Some("STALE".to_string()))?;
         save_to(root, state)?;
@@ -316,9 +317,30 @@ fn refresh_liveness(root: &Path, state: &mut ContainerState) -> Result<()> {
         return Ok(());
     }
 
+    cleanup_stale_resources(state);
     release_state_network_allocation(state);
     state.mark_stopped(None, Some("STALE".to_string()))?;
     save_to(root, state)
+}
+
+fn cleanup_stale_resources(state: &ContainerState) {
+    if let Some(cgroup_path) = &state.cgroup_path {
+        let path = Path::new(cgroup_path);
+        if path.exists() {
+            let _ = fs::remove_dir(path);
+        }
+    }
+
+    if state.network_mode == "bridge" {
+        if let Some(subnet) = &state.network_subnet {
+            let _ = crate::network::cleanup_nat(subnet);
+        }
+    }
+
+    if let Some(pid) = state.pid {
+        let host_veth = format!("vethh{pid}");
+        let _ = crate::network::cleanup_veth_host(&host_veth);
+    }
 }
 
 fn release_state_network_allocation(state: &ContainerState) {
