@@ -1,4 +1,5 @@
-use anyhow::{bail, Context, Result};
+use crate::error::OciConfigError;
+use anyhow::{Context, Result};
 use nix::libc;
 use serde::Deserialize;
 use std::fs;
@@ -208,62 +209,67 @@ pub struct LinuxPids {
 }
 
 impl OciConfig {
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> std::result::Result<(), OciConfigError> {
         if self.process.args.is_empty() {
-            bail!("process.args must not be empty");
+            return Err(OciConfigError::EmptyProcessArgs);
         }
 
         if self.root.path.trim().is_empty() {
-            bail!("root.path must not be empty");
+            return Err(OciConfigError::EmptyRootPath);
         }
 
         for mount in &self.mounts {
             if mount.destination.trim().is_empty() {
-                bail!("mount.destination must not be empty");
+                return Err(OciConfigError::EmptyMountDestination);
             }
             if mount.mount_type != "bind" {
-                bail!("unsupported mount type: {}", mount.mount_type);
+                return Err(OciConfigError::UnsupportedMountType {
+                    mount_type: mount.mount_type.clone(),
+                });
             }
             if mount.source.as_deref().unwrap_or("").trim().is_empty() {
-                bail!("bind mount source must not be empty");
+                return Err(OciConfigError::EmptyBindMountSource);
             }
         }
 
         if let Some(healthcheck) = &self.healthcheck {
             if healthcheck.test.is_empty() {
-                bail!("healthcheck.test must not be empty");
+                return Err(OciConfigError::EmptyHealthcheckTest);
             }
         }
 
         for rlimit in &self.process.rlimits {
             if rlimit.soft > rlimit.hard {
-                bail!(
-                    "process.rlimits {} soft limit must not exceed hard limit",
-                    rlimit.rlimit_type
-                );
+                return Err(OciConfigError::RlimitSoftExceedsHard {
+                    rlimit_type: rlimit.rlimit_type.clone(),
+                });
             }
             if rlimit_resource(&rlimit.rlimit_type).is_none() {
-                bail!("unsupported process.rlimits type: {}", rlimit.rlimit_type);
+                return Err(OciConfigError::UnsupportedRlimit {
+                    rlimit_type: rlimit.rlimit_type.clone(),
+                });
             }
         }
 
         if let Some(overlay) = self.crun.as_ref().and_then(|crun| crun.overlay.as_ref()) {
             if overlay.enabled {
                 if overlay.upperdir.trim().is_empty() {
-                    bail!("crun.overlay.upperdir must not be empty");
+                    return Err(OciConfigError::EmptyOverlayPath { field: "upperdir" });
                 }
                 if overlay.workdir.trim().is_empty() {
-                    bail!("crun.overlay.workdir must not be empty");
+                    return Err(OciConfigError::EmptyOverlayPath { field: "workdir" });
                 }
                 if overlay.mergeddir.trim().is_empty() {
-                    bail!("crun.overlay.mergeddir must not be empty");
+                    return Err(OciConfigError::EmptyOverlayPath { field: "mergeddir" });
                 }
             }
         }
 
         if let Some(profile) = self.crun.as_ref().and_then(|crun| crun.profile.as_deref()) {
             if !matches!(profile, "restricted" | "debug") {
-                bail!("unsupported crun.profile: {profile}");
+                return Err(OciConfigError::UnsupportedCrunProfile {
+                    profile: profile.to_string(),
+                });
             }
         }
 
@@ -305,13 +311,12 @@ pub fn rlimit_resource(name: &str) -> Option<libc::__rlimit_resource_t> {
     }
 }
 
-fn validate_container_path(path: &str) -> Result<()> {
+fn validate_container_path(path: &str) -> std::result::Result<(), OciConfigError> {
     let path = Path::new(path);
     if !path.is_absolute() {
-        bail!(
-            "linux masked/readonly path must be absolute: {}",
-            path.display()
-        );
+        return Err(OciConfigError::LinuxPathNotAbsolute {
+            path: path.display().to_string(),
+        });
     }
     if path.components().any(|component| {
         matches!(
@@ -319,10 +324,9 @@ fn validate_container_path(path: &str) -> Result<()> {
             std::path::Component::ParentDir | std::path::Component::Prefix(_)
         )
     }) {
-        bail!(
-            "linux masked/readonly path must not escape root: {}",
-            path.display()
-        );
+        return Err(OciConfigError::LinuxPathEscapesRoot {
+            path: path.display().to_string(),
+        });
     }
     Ok(())
 }
@@ -342,8 +346,8 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<OciConfig> {
 mod tests {
     use super::*;
 
-    fn parse_config(input: &str) -> Result<OciConfig> {
-        let config: OciConfig = serde_json::from_str(input)?;
+    fn parse_config(input: &str) -> std::result::Result<OciConfig, OciConfigError> {
+        let config: OciConfig = serde_json::from_str(input).expect("test JSON should parse");
         config.validate()?;
         Ok(config)
     }
@@ -439,7 +443,7 @@ mod tests {
         )
         .expect_err("empty args should be rejected");
 
-        assert!(error.to_string().contains("process.args"));
+        assert!(matches!(error, OciConfigError::EmptyProcessArgs));
     }
 
     #[test]
@@ -452,7 +456,7 @@ mod tests {
         )
         .expect_err("empty root path should be rejected");
 
-        assert!(error.to_string().contains("root.path"));
+        assert!(matches!(error, OciConfigError::EmptyRootPath));
     }
 
     #[test]
@@ -472,7 +476,10 @@ mod tests {
         )
         .expect_err("unsupported mount type should be rejected");
 
-        assert!(error.to_string().contains("unsupported mount type"));
+        assert!(matches!(
+            error,
+            OciConfigError::UnsupportedMountType { mount_type } if mount_type == "tmpfs"
+        ));
     }
 
     #[test]
@@ -493,7 +500,10 @@ mod tests {
         )
         .expect_err("empty overlay paths should be rejected");
 
-        assert!(error.to_string().contains("crun.overlay.upperdir"));
+        assert!(matches!(
+            error,
+            OciConfigError::EmptyOverlayPath { field: "upperdir" }
+        ));
     }
 
     #[test]
@@ -568,7 +578,10 @@ mod tests {
             }"#,
         )
         .expect_err("soft rlimit greater than hard should be rejected");
-        assert!(rlimit_error.to_string().contains("soft limit"));
+        assert!(matches!(
+            rlimit_error,
+            OciConfigError::RlimitSoftExceedsHard { rlimit_type } if rlimit_type == "RLIMIT_NOFILE"
+        ));
 
         let path_error = parse_config(
             r#"{
@@ -578,7 +591,10 @@ mod tests {
             }"#,
         )
         .expect_err("relative masked path should be rejected");
-        assert!(path_error.to_string().contains("must be absolute"));
+        assert!(matches!(
+            path_error,
+            OciConfigError::LinuxPathNotAbsolute { path } if path == "proc/kcore"
+        ));
     }
 
     #[test]
@@ -592,7 +608,10 @@ mod tests {
         )
         .expect_err("unknown profile should be rejected");
 
-        assert!(error.to_string().contains("unsupported crun.profile"));
+        assert!(matches!(
+            error,
+            OciConfigError::UnsupportedCrunProfile { profile } if profile == "fast-but-unsafe"
+        ));
     }
 
     #[test]
@@ -606,6 +625,6 @@ mod tests {
         )
         .expect_err("empty healthcheck test should be rejected");
 
-        assert!(error.to_string().contains("healthcheck.test"));
+        assert!(matches!(error, OciConfigError::EmptyHealthcheckTest));
     }
 }
