@@ -34,6 +34,18 @@ pub enum ContainerError {
 
     #[error("parent exited before user namespace was mapped")]
     ParentExitedBeforeUsernsMapped,
+
+    #[error("failed to set controlling terminal")]
+    FailedToSetControllingTerminal,
+
+    #[error("failed to dup slave to stdin")]
+    FailedToDupSlaveToStdin,
+
+    #[error("failed to dup slave to stdout")]
+    FailedToDupSlaveToStdout,
+
+    #[error("failed to dup slave to stderr")]
+    FailedToDupSlaveToStderr,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

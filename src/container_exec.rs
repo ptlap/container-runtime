@@ -119,16 +119,16 @@ fn run_namespace_helper(config: ExecConfig<'_>, pty_manager: Option<PtyManager>)
                 setsid().context("failed to setsid for exec process")?;
                 unsafe {
                     if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) == -1 {
-                        return Err(anyhow::anyhow!("failed to set controlling terminal"));
+                        return Err(ContainerError::FailedToSetControllingTerminal.into());
                     }
                     if libc::dup2(slave_fd, 0) == -1 {
-                        return Err(anyhow::anyhow!("failed to dup slave to stdin"));
+                        return Err(ContainerError::FailedToDupSlaveToStdin.into());
                     }
                     if libc::dup2(slave_fd, 1) == -1 {
-                        return Err(anyhow::anyhow!("failed to dup slave to stdout"));
+                        return Err(ContainerError::FailedToDupSlaveToStdout.into());
                     }
                     if libc::dup2(slave_fd, 2) == -1 {
-                        return Err(anyhow::anyhow!("failed to dup slave to stderr"));
+                        return Err(ContainerError::FailedToDupSlaveToStderr.into());
                     }
                 }
             }
