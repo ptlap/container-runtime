@@ -1,3 +1,4 @@
+use crate::spec::config::load_config;
 use crate::state::{self, ContainerStatus, DEFAULT_STATE_ROOT};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -91,6 +92,7 @@ pub fn checkpoint(id: &str, options: CheckpointOptions) -> Result<CheckpointRepo
 
 pub fn restore(id: &str, options: RestoreOptions) -> Result<RestoreReport> {
     validate_checkpoint_id(id)?;
+    let container_state = state::load_current(id).ok();
     let criu = detect_criu();
     ensure_criu_available(&criu)?;
 
@@ -104,7 +106,10 @@ pub fn restore(id: &str, options: RestoreOptions) -> Result<RestoreReport> {
         );
     }
 
-    let command = restore_command(&images_dir);
+    let rootfs = container_state
+        .as_ref()
+        .and_then(|state| restore_rootfs(state).ok());
+    let command = restore_command(&images_dir, rootfs.as_deref());
     run_criu(&command).with_context(|| format!("failed to restore checkpoint for {id}"))?;
 
     Ok(RestoreReport {
@@ -201,8 +206,8 @@ fn checkpoint_command(pid: i32, images_dir: &Path) -> Vec<String> {
     ]
 }
 
-fn restore_command(images_dir: &Path) -> Vec<String> {
-    vec![
+fn restore_command(images_dir: &Path, rootfs: Option<&Path>) -> Vec<String> {
+    let mut command = vec![
         "criu".to_string(),
         "restore".to_string(),
         "-D".to_string(),
@@ -217,7 +222,25 @@ fn restore_command(images_dir: &Path) -> Vec<String> {
         "--skip-mnt".to_string(),
         "./sys".to_string(),
         "-d".to_string(),
-    ]
+    ];
+
+    if let Some(rootfs) = rootfs {
+        command.push("--root".to_string());
+        command.push(rootfs.display().to_string());
+    }
+
+    command
+}
+
+fn restore_rootfs(state: &state::ContainerState) -> Result<PathBuf> {
+    let bundle = PathBuf::from(&state.bundle);
+    let config = load_config(bundle.join("config.json"))?;
+    let root_path = Path::new(&config.root.path);
+    if root_path.is_absolute() {
+        Ok(root_path.to_path_buf())
+    } else {
+        Ok(bundle.join(root_path))
+    }
 }
 
 fn default_checkpoint_dir(id: &str) -> PathBuf {
@@ -258,7 +281,10 @@ mod tests {
 
     #[test]
     fn builds_restore_command_detached() {
-        let command = restore_command(Path::new("/run/crun-rs/demo/checkpoint"));
+        let command = restore_command(
+            Path::new("/run/crun-rs/demo/checkpoint"),
+            Some(Path::new("/tmp/rootfs")),
+        );
 
         assert_eq!(command[0], "criu");
         assert!(command.contains(&"restore".to_string()));
@@ -266,6 +292,8 @@ mod tests {
         assert!(command.contains(&"--manage-cgroups=ignore".to_string()));
         assert!(command.contains(&"/sys".to_string()));
         assert!(command.contains(&"./sys".to_string()));
+        assert!(command.contains(&"--root".to_string()));
+        assert!(command.contains(&"/tmp/rootfs".to_string()));
         assert!(command.contains(&"-d".to_string()));
     }
 
