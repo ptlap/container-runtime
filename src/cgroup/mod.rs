@@ -1,4 +1,5 @@
 use crate::error::CgroupError;
+use crate::state::{self, ContainerStatus};
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
 use serde::Serialize;
@@ -198,6 +199,32 @@ pub fn read_stats(path: &Path) -> Result<CgroupStats> {
         },
         io: read_io_stats(path.join("io.stat"))?,
     })
+}
+
+pub fn read_container_stats(id: &str) -> Result<CgroupStats> {
+    let cgroup_path = running_cgroup_path(id)?;
+    read_stats(&cgroup_path)
+}
+
+pub fn running_cgroup_path(id: &str) -> Result<PathBuf> {
+    let state = state::load_current(id)?;
+    if state.status != ContainerStatus::Running {
+        return Err(CgroupError::ContainerNotRunning { id: id.to_string() }.into());
+    }
+
+    let Some(cgroup_path) = state.cgroup_path.as_deref() else {
+        return Err(CgroupError::ContainerHasNoPath { id: id.to_string() }.into());
+    };
+
+    let cgroup_path = PathBuf::from(cgroup_path);
+    if !cgroup_path.exists() {
+        return Err(CgroupError::PathDoesNotExist {
+            path: cgroup_path.display().to_string(),
+        }
+        .into());
+    }
+
+    Ok(cgroup_path)
 }
 
 fn read_optional_u64(path: PathBuf) -> Result<Option<u64>> {

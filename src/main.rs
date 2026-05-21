@@ -1,7 +1,9 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::audit_log::{self, AuditEvent as RuntimeEvent};
-use container_runtime::cgroup::{read_stats, CgroupConfig};
+use container_runtime::cgroup::{
+    read_container_stats, read_stats, running_cgroup_path, CgroupConfig,
+};
 use container_runtime::checkpoint::{self, CheckpointOptions, RestoreOptions};
 use container_runtime::cli_runtime::{process_exit_status, should_capture_logs};
 use container_runtime::container::{run_process, ProcessConfig};
@@ -952,21 +954,7 @@ fn apply_userns_mode(mut flags: CloneFlags, userns_mode: UserNamespaceMode) -> C
 }
 
 fn show_stats(id: &str, json: bool) -> Result<()> {
-    let state = state::load_current(id)?;
-    if state.status != ContainerStatus::Running {
-        bail!("container {id} is not running");
-    }
-
-    let Some(cgroup_path) = state.cgroup_path.as_deref() else {
-        bail!("container {id} has no cgroup path");
-    };
-
-    let cgroup_path = Path::new(cgroup_path);
-    if !cgroup_path.exists() {
-        bail!("cgroup path does not exist: {}", cgroup_path.display());
-    }
-
-    let stats = read_stats(cgroup_path)?;
+    let stats = read_container_stats(id)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&stats)?);
     } else {
@@ -1047,18 +1035,7 @@ fn stream_events(
         bail!("events interval must be greater than zero");
     }
 
-    let state = state::load_current(id)?;
-    if state.status != ContainerStatus::Running {
-        bail!("container {id} is not running");
-    }
-
-    let Some(cgroup_path) = state.cgroup_path.as_deref() else {
-        bail!("container {id} has no cgroup path");
-    };
-    let cgroup_path = PathBuf::from(cgroup_path);
-    if !cgroup_path.exists() {
-        bail!("cgroup path does not exist: {}", cgroup_path.display());
-    }
+    let cgroup_path = running_cgroup_path(id)?;
 
     let mut previous = EventSnapshot::from_stats(&read_stats(&cgroup_path)?);
     if snapshot {

@@ -94,6 +94,15 @@ pub enum CgroupError {
 
     #[error("pids_limit must be greater than zero, got {value}")]
     InvalidPidsLimit { value: i64 },
+
+    #[error("container {id} is not running")]
+    ContainerNotRunning { id: String },
+
+    #[error("container {id} has no cgroup path")]
+    ContainerHasNoPath { id: String },
+
+    #[error("cgroup path does not exist: {path}")]
+    PathDoesNotExist { path: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
