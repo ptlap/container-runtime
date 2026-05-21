@@ -5,6 +5,7 @@ pub mod container;
 pub mod container_exec;
 pub mod doctor;
 pub mod error;
+pub mod events;
 mod fd;
 pub mod filesystem;
 pub mod health;
