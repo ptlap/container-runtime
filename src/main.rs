@@ -7,6 +7,7 @@ use container_runtime::cli_runtime::{process_exit_status, should_capture_logs};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
+use container_runtime::error::LifecycleError;
 use container_runtime::events::{collect_counter_events, snapshot_event, EventSnapshot};
 use container_runtime::filesystem::resolve_rootfs;
 use container_runtime::health::{self, HealthResult};
@@ -786,7 +787,7 @@ fn execute_container(
     }
 
     if let Some(error) = child_error {
-        bail!("container child failed: {error}");
+        return Err(LifecycleError::ChildFailed { error }.into());
     }
 
     exit_with_process_status(exit_code, exit_signal.as_deref());

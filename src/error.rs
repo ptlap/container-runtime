@@ -55,6 +55,9 @@ pub enum LifecycleError {
 
     #[error("container {id} is not created")]
     ContainerNotCreated { id: String },
+
+    #[error("container child failed: {error}")]
+    ChildFailed { error: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
