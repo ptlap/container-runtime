@@ -59,3 +59,15 @@ pub enum CgroupError {
     #[error("pids_limit must be greater than zero, got {value}")]
     InvalidPidsLimit { value: i64 },
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum HealthcheckError {
+    #[error("healthcheck.test must not be empty")]
+    EmptyTest,
+
+    #[error("healthcheck is disabled")]
+    Disabled,
+
+    #[error("healthcheck {kind} must include a command")]
+    MissingCommand { kind: &'static str },
+}

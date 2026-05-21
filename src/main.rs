@@ -7,6 +7,7 @@ use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
 use container_runtime::filesystem::OverlayConfig;
+use container_runtime::health;
 use container_runtime::image;
 use container_runtime::inspect_security;
 use container_runtime::namespace::namespace_flags;
@@ -17,7 +18,7 @@ use container_runtime::selfexec::{
     current_exe_link, ensure_reexecuted_from_memfd, is_running_from_memfd,
 };
 use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
-use container_runtime::spec::config::{load_config, Healthcheck};
+use container_runtime::spec::config::load_config;
 use container_runtime::state::{
     self, ContainerState, ContainerStatus, HealthState, RuntimeMetadata, StartedResources,
 };
@@ -1476,8 +1477,8 @@ fn run_healthcheck_once(id: &str) -> Result<HealthResult> {
         .healthcheck
         .as_ref()
         .context("container has no healthcheck configured")?;
-    let args = healthcheck_command_args(healthcheck)?;
-    let max_attempts = healthcheck_attempts(healthcheck);
+    let args = health::command_args(healthcheck)?;
+    let max_attempts = health::attempts(healthcheck);
 
     let mut attempts = 0;
     let mut exit = None;
@@ -1549,37 +1550,6 @@ fn print_health_result(result: &HealthResult, json: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn healthcheck_command_args(healthcheck: &Healthcheck) -> Result<Vec<String>> {
-    let Some((kind, rest)) = healthcheck.test.split_first() else {
-        bail!("healthcheck.test must not be empty");
-    };
-
-    match kind.as_str() {
-        "NONE" => bail!("healthcheck is disabled"),
-        "CMD" => {
-            if rest.is_empty() {
-                bail!("healthcheck CMD must include a command");
-            }
-            Ok(rest.to_vec())
-        }
-        "CMD-SHELL" => {
-            if rest.is_empty() {
-                bail!("healthcheck CMD-SHELL must include a command");
-            }
-            Ok(vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                rest.join(" "),
-            ])
-        }
-        _ => Ok(healthcheck.test.clone()),
-    }
-}
-
-fn healthcheck_attempts(healthcheck: &Healthcheck) -> u32 {
-    healthcheck.retries.unwrap_or(0).saturating_add(1)
 }
 
 fn list_containers(json: bool) -> Result<()> {
@@ -2020,74 +1990,5 @@ mod tests {
         assert_eq!(fields.get("pids.max"), Some(&1));
         assert_eq!(fields.get("cpu.nr_throttled"), Some(&3));
         assert_eq!(fields.get("cpu.throttled_usec"), Some(&40));
-    }
-
-    #[test]
-    fn builds_cmd_healthcheck_args() {
-        let healthcheck = Healthcheck {
-            test: vec!["CMD".to_string(), "/bin/true".to_string()],
-            interval: None,
-            timeout: None,
-            retries: None,
-        };
-
-        assert_eq!(
-            healthcheck_command_args(&healthcheck).expect("valid healthcheck"),
-            ["/bin/true".to_string()]
-        );
-    }
-
-    #[test]
-    fn builds_cmd_shell_healthcheck_args() {
-        let healthcheck = Healthcheck {
-            test: vec![
-                "CMD-SHELL".to_string(),
-                "echo".to_string(),
-                "ok".to_string(),
-            ],
-            interval: None,
-            timeout: None,
-            retries: None,
-        };
-
-        assert_eq!(
-            healthcheck_command_args(&healthcheck).expect("valid healthcheck"),
-            [
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo ok".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn rejects_disabled_healthcheck_args() {
-        let healthcheck = Healthcheck {
-            test: vec!["NONE".to_string()],
-            interval: None,
-            timeout: None,
-            retries: None,
-        };
-
-        assert!(healthcheck_command_args(&healthcheck).is_err());
-    }
-
-    #[test]
-    fn computes_healthcheck_attempts_from_retries() {
-        let default_retries = Healthcheck {
-            test: vec!["CMD".to_string(), "true".to_string()],
-            interval: None,
-            timeout: None,
-            retries: None,
-        };
-        let configured_retries = Healthcheck {
-            test: vec!["CMD".to_string(), "true".to_string()],
-            interval: None,
-            timeout: None,
-            retries: Some(3),
-        };
-
-        assert_eq!(healthcheck_attempts(&default_retries), 1);
-        assert_eq!(healthcheck_attempts(&configured_retries), 4);
     }
 }

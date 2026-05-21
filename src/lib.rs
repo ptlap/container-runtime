@@ -7,6 +7,7 @@ pub mod doctor;
 pub mod error;
 mod fd;
 pub mod filesystem;
+pub mod health;
 pub mod image;
 pub mod inspect_security;
 pub mod namespace;
