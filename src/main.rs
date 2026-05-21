@@ -25,7 +25,7 @@ use container_runtime::security::SecurityProfile;
 use container_runtime::selfexec::{
     current_exe_link, ensure_reexecuted_from_memfd, is_running_from_memfd,
 };
-use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
+use container_runtime::signal::DEFAULT_SIGNAL;
 use container_runtime::spec::config::load_config;
 use container_runtime::state::{
     self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources,
@@ -38,7 +38,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{fs, io};
 
 const DEFAULT_STOP_TIMEOUT_SECS: u64 = 10;
@@ -1215,20 +1215,12 @@ fn follow_logs(log_path: &Path) -> Result<()> {
 }
 
 fn kill_container(id: &str, signal: &str) -> Result<()> {
-    let state = state::load_current(id)?;
-    if state.status != ContainerStatus::Running {
-        bail!("container {id} is not running");
-    }
-
-    let Some(pid) = state.pid else {
-        bail!("container {id} has no pid");
-    };
-
-    let signal_number = parse_signal(signal)?;
-    send_signal(pid, signal_number).with_context(|| {
-        format!("failed to send signal {signal} ({signal_number}) to container {id} pid {pid}")
-    })?;
-    println!("sent signal {signal} to container {id} pid {pid}");
+    let report = lifecycle::send_container_signal(id, signal)
+        .with_context(|| format!("failed to send signal {signal} to container {id}"))?;
+    println!(
+        "sent signal {} to container {} pid {}",
+        report.signal, report.id, report.pid
+    );
 
     Ok(())
 }
@@ -1236,7 +1228,7 @@ fn kill_container(id: &str, signal: &str) -> Result<()> {
 fn stop_container(id: &str, timeout_secs: u64) -> Result<()> {
     kill_container(id, "SIGTERM")?;
 
-    if wait_for_stopped(id, Duration::from_secs(timeout_secs))? {
+    if lifecycle::wait_for_stopped(id, Duration::from_secs(timeout_secs))? {
         println!("container stopped: {id}");
         return Ok(());
     }
@@ -1244,28 +1236,12 @@ fn stop_container(id: &str, timeout_secs: u64) -> Result<()> {
     println!("container {id} did not stop after {timeout_secs}s; sending SIGKILL");
     kill_container(id, "SIGKILL")?;
 
-    if wait_for_stopped(id, Duration::from_secs(5))? {
+    if lifecycle::wait_for_stopped(id, Duration::from_secs(5))? {
         println!("container killed: {id}");
         return Ok(());
     }
 
-    bail!("container {id} did not stop after SIGKILL");
-}
-
-fn wait_for_stopped(id: &str, timeout: Duration) -> Result<bool> {
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        if state::load_current(id)?.status == ContainerStatus::Stopped {
-            return Ok(true);
-        }
-
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-
-        thread::sleep(Duration::from_millis(100));
-    }
+    Err(LifecycleError::StopDidNotComplete { id: id.to_string() }.into())
 }
 
 fn delete_container(id: &str) -> Result<()> {

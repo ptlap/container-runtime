@@ -1,5 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::audit_log;
 use crate::error::LifecycleError;
@@ -8,6 +10,7 @@ use crate::modes::LogMode;
 use crate::network::NetworkMode;
 use crate::policy;
 use crate::security::SecurityProfile;
+use crate::signal::{parse_signal, send_signal};
 use crate::spec::config::load_config;
 use crate::state::{self, ContainerState, ContainerStatus, RuntimeMetadata};
 use crate::userns::UserNamespaceMode;
@@ -21,6 +24,14 @@ pub struct CreateOptions<'a> {
     pub log_mode: LogMode,
     pub userns_mode: UserNamespaceMode,
     pub tty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KillReport {
+    pub id: String,
+    pub pid: i32,
+    pub signal: String,
+    pub signal_number: i32,
 }
 
 pub fn record_run_created(id: &str) -> Result<()> {
@@ -71,6 +82,46 @@ pub fn load_created(id: &str) -> Result<ContainerState> {
     Ok(state)
 }
 
+pub fn send_container_signal(id: &str, signal: &str) -> Result<KillReport> {
+    let pid = running_pid(id)?;
+    let signal_number = parse_signal(signal)?;
+    send_signal(pid, signal_number)?;
+
+    Ok(KillReport {
+        id: id.to_string(),
+        pid,
+        signal: signal.to_string(),
+        signal_number,
+    })
+}
+
+pub fn wait_for_stopped(id: &str, timeout: Duration) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        if state::load_current(id)?.status == ContainerStatus::Stopped {
+            return Ok(true);
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+pub fn running_pid(id: &str) -> Result<i32> {
+    let state = state::load_current(id)?;
+    if state.status != ContainerStatus::Running {
+        return Err(LifecycleError::ContainerNotRunning { id: id.to_string() }.into());
+    }
+
+    state
+        .pid
+        .ok_or_else(|| LifecycleError::ContainerHasNoPid { id: id.to_string() }.into())
+}
+
 fn ensure_container_absent(id: &str) -> Result<()> {
     if state::exists(id)? {
         return Err(LifecycleError::ContainerAlreadyExists { id: id.to_string() }.into());
@@ -95,5 +146,17 @@ mod tests {
         };
 
         assert_eq!(error.to_string(), "container demo is not created");
+    }
+
+    #[test]
+    fn formats_stop_timeout_error() {
+        let error = LifecycleError::StopDidNotComplete {
+            id: "demo".to_string(),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "container demo did not stop after SIGKILL"
+        );
     }
 }

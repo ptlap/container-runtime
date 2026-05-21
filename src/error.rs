@@ -58,6 +58,15 @@ pub enum LifecycleError {
 
     #[error("container child failed: {error}")]
     ChildFailed { error: String },
+
+    #[error("container {id} is not running")]
+    ContainerNotRunning { id: String },
+
+    #[error("container {id} has no pid")]
+    ContainerHasNoPid { id: String },
+
+    #[error("container {id} did not stop after SIGKILL")]
+    StopDidNotComplete { id: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
