@@ -16,6 +16,43 @@ pub struct OverlayConfig {
     pub mergeddir: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootfsMode {
+    Direct,
+    Overlay,
+}
+
+impl RootfsMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Overlay => "overlay",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedRootfs {
+    pub path: PathBuf,
+    pub overlay_config: Option<OverlayConfig>,
+    pub mode: RootfsMode,
+}
+
+pub fn resolve_rootfs(bundle: &Path, root_path: &str, crun: Option<&CrunConfig>) -> ResolvedRootfs {
+    let overlay_config = resolve_overlay_config(bundle, root_path, crun);
+    let mode = if overlay_config.is_some() {
+        RootfsMode::Overlay
+    } else {
+        RootfsMode::Direct
+    };
+
+    ResolvedRootfs {
+        path: resolve_bundle_path(bundle, root_path),
+        overlay_config,
+        mode,
+    }
+}
+
 pub fn resolve_overlay_config(
     bundle: &Path,
     root_path: &str,
@@ -500,5 +537,14 @@ mod tests {
                 .and_then(Path::parent)
                 .expect("destination has test root"),
         );
+    }
+
+    #[test]
+    fn resolves_direct_rootfs_mode_without_overlay() {
+        let rootfs = resolve_rootfs(Path::new("/bundle"), "rootfs", None);
+
+        assert_eq!(rootfs.path, PathBuf::from("/bundle/rootfs"));
+        assert_eq!(rootfs.mode, RootfsMode::Direct);
+        assert!(rootfs.overlay_config.is_none());
     }
 }

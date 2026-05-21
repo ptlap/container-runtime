@@ -8,7 +8,7 @@ use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
 use container_runtime::events::{collect_counter_events, snapshot_event, EventSnapshot};
-use container_runtime::filesystem::resolve_overlay_config;
+use container_runtime::filesystem::resolve_rootfs;
 use container_runtime::health::{self, HealthResult};
 use container_runtime::image;
 use container_runtime::inspect_security;
@@ -625,14 +625,7 @@ fn create_container(options: RunOptions) -> Result<()> {
         options.security_profile,
         options.log_mode,
     )?;
-    let rootfs_mode =
-        if resolve_overlay_config(&options.bundle, &config.root.path, config.crun.as_ref())
-            .is_some()
-        {
-            "overlay"
-        } else {
-            "direct"
-        };
+    let rootfs_mode = resolve_rootfs(&options.bundle, &config.root.path, config.crun.as_ref()).mode;
 
     let state = ContainerState::created(
         &options.id,
@@ -642,7 +635,7 @@ fn create_container(options: RunOptions) -> Result<()> {
             security_profile: effective_policy.security_profile.as_str(),
             log_mode: effective_policy.log_mode.as_str(),
             userns_mode: options.userns_mode.as_str(),
-            rootfs_mode,
+            rootfs_mode: rootfs_mode.as_str(),
             policy_profile: effective_policy.profile.as_str(),
             tty: options.tty,
         },
@@ -703,17 +696,11 @@ fn execute_container(
     let log_mode = effective_policy.log_mode;
     let policy_profile = effective_policy.profile;
 
-    let rootfs = bundle.join(&config.root.path);
-    let overlay_config = resolve_overlay_config(&bundle, &config.root.path, config.crun.as_ref());
-    let rootfs_mode = if overlay_config.is_some() {
-        "overlay"
-    } else {
-        "direct"
-    };
+    let rootfs = resolve_rootfs(&bundle, &config.root.path, config.crun.as_ref());
 
     println!("args: {:?}", config.process.args);
     println!("env: {:?}", config.process.env);
-    println!("rootfs: {}", rootfs.display());
+    println!("rootfs: {}", rootfs.path.display());
 
     let namespaces = config
         .linux
@@ -735,7 +722,7 @@ fn execute_container(
     println!("security profile: {}", security_profile.as_str());
     println!("log mode: {}", log_mode.as_str());
     println!("user namespace: {}", userns_mode.as_str());
-    println!("rootfs mode: {rootfs_mode}");
+    println!("rootfs mode: {}", rootfs.mode.as_str());
     println!("policy profile: {}", policy_profile.as_str());
 
     let masked_paths = config
@@ -777,7 +764,7 @@ fn execute_container(
                     security_profile: security_profile.as_str(),
                     log_mode: log_mode.as_str(),
                     userns_mode: userns_mode.as_str(),
-                    rootfs_mode,
+                    rootfs_mode: rootfs.mode.as_str(),
                     policy_profile: policy_profile.as_str(),
                     tty: options.tty,
                 },
@@ -795,8 +782,8 @@ fn execute_container(
         .args(&config.process.args)
         .env(&config.process.env)
         .cwd(config.process.cwd.as_deref())
-        .rootfs(&rootfs)
-        .overlay_config(overlay_config)
+        .rootfs(&rootfs.path)
+        .overlay_config(rootfs.overlay_config)
         .readonly_rootfs(config.root.readonly)
         .mounts(&config.mounts)
         .process_user(config.process.user.as_ref())
