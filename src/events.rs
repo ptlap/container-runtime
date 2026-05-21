@@ -1,6 +1,11 @@
 use crate::audit_log::AuditEvent;
-use crate::cgroup::CgroupStats;
+use crate::cgroup::{read_stats, running_cgroup_path, CgroupStats};
+use crate::error::EventError;
+use crate::state::{self, ContainerStatus};
+use anyhow::Result;
 use std::collections::BTreeMap;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventSnapshot {
@@ -91,6 +96,57 @@ pub fn collect_counter_events(
     }
 
     events
+}
+
+pub fn stream_counter_events(
+    id: &str,
+    snapshot: bool,
+    once: bool,
+    interval: Duration,
+    mut emit: impl FnMut(AuditEvent) -> Result<()>,
+) -> Result<()> {
+    if interval.is_zero() {
+        return Err(EventError::InvalidInterval.into());
+    }
+
+    let cgroup_path = running_cgroup_path(id)?;
+    let mut previous = EventSnapshot::from_stats(&read_stats(&cgroup_path)?);
+    if snapshot {
+        emit(snapshot_event(id, &previous))?;
+    }
+    if once {
+        return Ok(());
+    }
+
+    loop {
+        thread::sleep(interval);
+
+        let state = state::load_current(id)?;
+        if state.status != ContainerStatus::Running {
+            emit(
+                AuditEvent::new(id, "lifecycle", "stopped")
+                    .with_status(container_status_name(&state.status)),
+            )?;
+            break;
+        }
+
+        let current_stats = read_stats(&cgroup_path)?;
+        let current = EventSnapshot::from_stats(&current_stats);
+        for event in collect_counter_events(id, &previous, &current) {
+            emit(event)?;
+        }
+        previous = current;
+    }
+
+    Ok(())
+}
+
+fn container_status_name(status: &ContainerStatus) -> &'static str {
+    match status {
+        ContainerStatus::Created => "created",
+        ContainerStatus::Running => "running",
+        ContainerStatus::Stopped => "stopped",
+    }
 }
 
 fn append_counter_events(
@@ -192,5 +248,16 @@ mod tests {
         assert_eq!(fields.get("pids.max"), Some(&1));
         assert_eq!(fields.get("cpu.nr_throttled"), Some(&3));
         assert_eq!(fields.get("cpu.throttled_usec"), Some(&40));
+    }
+
+    #[test]
+    fn rejects_zero_event_interval_with_typed_error() {
+        let error = stream_counter_events("demo", false, true, Duration::ZERO, |_| Ok(()))
+            .expect_err("zero interval should be rejected");
+
+        assert!(matches!(
+            error.downcast_ref::<EventError>(),
+            Some(EventError::InvalidInterval)
+        ));
     }
 }

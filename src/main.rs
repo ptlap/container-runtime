@@ -1,13 +1,13 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::audit_log::{self, AuditEvent as RuntimeEvent};
-use container_runtime::cgroup::{read_container_stats, read_stats, running_cgroup_path};
+use container_runtime::cgroup::read_container_stats;
 use container_runtime::checkpoint::{self, CheckpointOptions, RestoreOptions};
 use container_runtime::cli_runtime::{process_exit_status, should_capture_logs};
 use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::doctor;
 use container_runtime::error::LifecycleError;
-use container_runtime::events::{collect_counter_events, snapshot_event, EventSnapshot};
+use container_runtime::events::stream_counter_events;
 use container_runtime::filesystem::resolve_rootfs;
 use container_runtime::health::{self, HealthResult};
 use container_runtime::image;
@@ -959,45 +959,13 @@ fn stream_events(
         return show_event_history(id, json);
     }
 
-    if interval_ms == 0 {
-        bail!("events interval must be greater than zero");
-    }
-
-    let cgroup_path = running_cgroup_path(id)?;
-
-    let mut previous = EventSnapshot::from_stats(&read_stats(&cgroup_path)?);
-    if snapshot {
-        print_event(snapshot_event(id, &previous), json, true)?;
-    }
-    if once {
-        return Ok(());
-    }
-
-    let interval = Duration::from_millis(interval_ms);
-
-    loop {
-        thread::sleep(interval);
-
-        let state = state::load_current(id)?;
-        if state.status != ContainerStatus::Running {
-            print_event(
-                RuntimeEvent::new(id, "lifecycle", "stopped")
-                    .with_status(container_status_name(&state.status)),
-                json,
-                true,
-            )?;
-            break;
-        }
-
-        let current_stats = read_stats(&cgroup_path)?;
-        let current = EventSnapshot::from_stats(&current_stats);
-        for event in collect_counter_events(id, &previous, &current) {
-            print_event(event, json, true)?;
-        }
-        previous = current;
-    }
-
-    Ok(())
+    stream_counter_events(
+        id,
+        snapshot,
+        once,
+        Duration::from_millis(interval_ms),
+        |event| print_event(event, json, true),
+    )
 }
 
 fn print_event(event: RuntimeEvent, json: bool, audit: bool) -> Result<()> {
@@ -1042,14 +1010,6 @@ fn show_event_history(id: &str, json: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn container_status_name(status: &ContainerStatus) -> &'static str {
-    match status {
-        ContainerStatus::Created => "created",
-        ContainerStatus::Running => "running",
-        ContainerStatus::Stopped => "stopped",
-    }
 }
 
 fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: u64) -> Result<()> {

@@ -154,6 +154,12 @@ pub enum HealthRunError {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum EventError {
+    #[error("events interval must be greater than zero")]
+    InvalidInterval,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum StateError {
     #[error("container id must not be empty")]
     EmptyContainerId,
