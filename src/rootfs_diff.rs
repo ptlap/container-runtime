@@ -30,6 +30,16 @@ pub enum RootfsDiffKind {
     Deleted,
 }
 
+impl RootfsDiffKind {
+    pub fn as_label(&self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Modified => "modified",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+
 pub fn diff_container(id: &str) -> Result<RootfsDiffReport> {
     let container_state = state::load(id)?;
     let bundle = PathBuf::from(&container_state.bundle);
@@ -276,6 +286,13 @@ mod tests {
         );
 
         fs::remove_dir_all(root).expect("cleanup test dir");
+    }
+
+    #[test]
+    fn formats_diff_kind_labels() {
+        assert_eq!(RootfsDiffKind::Created.as_label(), "created");
+        assert_eq!(RootfsDiffKind::Modified.as_label(), "modified");
+        assert_eq!(RootfsDiffKind::Deleted.as_label(), "deleted");
     }
 
     fn test_dir(name: &str) -> PathBuf {

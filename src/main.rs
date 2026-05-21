@@ -19,7 +19,7 @@ use container_runtime::modes::{
 use container_runtime::namespace::effective_namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::policy;
-use container_runtime::rootfs_diff::{self, RootfsDiffKind};
+use container_runtime::rootfs_diff;
 use container_runtime::security::SecurityProfile;
 use container_runtime::selfexec::{
     current_exe_link, ensure_reexecuted_from_memfd, is_running_from_memfd,
@@ -29,7 +29,6 @@ use container_runtime::spec::config::load_config;
 use container_runtime::state::{self, ContainerState, RuntimeMetadata, StartedResources};
 use container_runtime::trace::{self, ProcessNode, TraceOptions, TraceReport};
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
-use serde::Serialize;
 use std::borrow::Cow;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -1243,34 +1242,14 @@ fn diff_rootfs(id: &str, json: bool) -> Result<()> {
     }
 
     for entry in &report.entries {
-        println!("{} {}", diff_kind_label(&entry.kind), entry.path);
+        println!("{} {}", entry.kind.as_label(), entry.path);
     }
 
     Ok(())
 }
 
-fn diff_kind_label(kind: &RootfsDiffKind) -> &'static str {
-    match kind {
-        RootfsDiffKind::Created => "created",
-        RootfsDiffKind::Modified => "modified",
-        RootfsDiffKind::Deleted => "deleted",
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct ValidationReport {
-    bundle: String,
-    valid: bool,
-    warnings: Vec<String>,
-}
-
 fn validate_bundle(bundle: &Path, json: bool) -> Result<()> {
-    let config = load_config(bundle.join("config.json"))?;
-    let report = ValidationReport {
-        bundle: bundle.display().to_string(),
-        valid: true,
-        warnings: config.validation_warnings(),
-    };
+    let report = container_runtime::spec::config::validate_bundle(bundle)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);

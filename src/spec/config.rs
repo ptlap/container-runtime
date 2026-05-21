@@ -1,7 +1,7 @@
 use crate::error::OciConfigError;
 use anyhow::{Context, Result};
 use nix::libc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
@@ -24,6 +24,13 @@ pub struct OciConfig {
 
     #[serde(default)]
     pub crun: Option<CrunConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BundleValidationReport {
+    pub bundle: String,
+    pub valid: bool,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -342,9 +349,21 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<OciConfig> {
     Ok(config)
 }
 
+pub fn validate_bundle(bundle: &Path) -> Result<BundleValidationReport> {
+    let config = load_config(bundle.join("config.json"))?;
+
+    Ok(BundleValidationReport {
+        bundle: bundle.display().to_string(),
+        valid: true,
+        warnings: config.validation_warnings(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn parse_config(input: &str) -> std::result::Result<OciConfig, OciConfigError> {
         let config: OciConfig = serde_json::from_str(input).expect("test JSON should parse");
@@ -457,6 +476,33 @@ mod tests {
         .expect_err("empty root path should be rejected");
 
         assert!(matches!(error, OciConfigError::EmptyRootPath));
+    }
+
+    #[test]
+    fn builds_bundle_validation_report_from_config() {
+        let bundle = test_dir("builds_bundle_validation_report_from_config");
+        fs::write(
+            bundle.join("config.json"),
+            r#"{
+                "process": {
+                    "args": ["/bin/sh"],
+                    "capabilities": {
+                        "effective": ["CAP_NET_ADMIN"]
+                    }
+                },
+                "root": { "path": "rootfs" }
+            }"#,
+        )
+        .expect("write config");
+
+        let report = validate_bundle(&bundle).expect("bundle should validate");
+
+        assert!(report.valid);
+        assert_eq!(report.bundle, bundle.display().to_string());
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].contains("process.capabilities"));
+
+        fs::remove_dir_all(bundle).expect("cleanup test dir");
     }
 
     #[test]
@@ -626,5 +672,15 @@ mod tests {
         .expect_err("empty healthcheck test should be rejected");
 
         assert!(matches!(error, OciConfigError::EmptyHealthcheckTest));
+    }
+
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("crun-config-test-{name}-{suffix}"));
+        fs::create_dir_all(&path).expect("create test dir");
+        path
     }
 }
