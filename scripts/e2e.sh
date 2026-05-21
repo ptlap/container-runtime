@@ -116,7 +116,9 @@ write_bundle "$mount_bundle" \
     "type": "bind",
     "options": ["rbind", "ro"]
   }]'
-"$runtime" run --net none --security unconfined "$mount_id" "$mount_bundle" | grep -q 'mounted-ok'
+mount_output="$tmp_root/mount.out"
+"$runtime" run --net none --security unconfined "$mount_id" "$mount_bundle" >"$mount_output" 2>&1
+grep -q 'mounted-ok' "$mount_output"
 "$runtime" delete "$mount_id" >/dev/null
 
 if [[ -t 0 && -t 1 ]] && command -v script >/dev/null 2>&1; then
