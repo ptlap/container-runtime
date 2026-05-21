@@ -11,6 +11,7 @@ pub mod filesystem;
 pub mod health;
 pub mod image;
 pub mod inspect_security;
+pub mod modes;
 pub mod namespace;
 pub mod network;
 pub mod rootfs_diff;

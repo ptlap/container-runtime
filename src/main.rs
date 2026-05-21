@@ -11,6 +11,9 @@ use container_runtime::filesystem::OverlayConfig;
 use container_runtime::health;
 use container_runtime::image;
 use container_runtime::inspect_security;
+use container_runtime::modes::{
+    parse_log_mode, parse_network_mode, parse_security_profile, LogMode,
+};
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::rootfs_diff::{self, RootfsDiffKind};
@@ -257,13 +260,6 @@ enum CliUsernsMode {
     Private,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum LogMode {
-    Auto,
-    On,
-    Off,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PolicyProfile {
     None,
@@ -296,16 +292,6 @@ impl From<CliLogMode> for LogMode {
             CliLogMode::Auto => Self::Auto,
             CliLogMode::On => Self::On,
             CliLogMode::Off => Self::Off,
-        }
-    }
-}
-
-impl LogMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::On => "on",
-            Self::Off => "off",
         }
     }
 }
@@ -914,32 +900,6 @@ fn resolve_bundle_path(bundle: &Path, path: &str) -> PathBuf {
         path.to_path_buf()
     } else {
         bundle.join(path)
-    }
-}
-
-fn parse_network_mode(value: &str) -> Result<NetworkMode> {
-    match value {
-        "host" => Ok(NetworkMode::Host),
-        "none" => Ok(NetworkMode::None),
-        "bridge" => Ok(NetworkMode::Bridge),
-        _ => bail!("invalid network mode in state: {value}"),
-    }
-}
-
-fn parse_security_profile(value: &str) -> Result<SecurityProfile> {
-    match value {
-        "default" => Ok(SecurityProfile::Default),
-        "unconfined" => Ok(SecurityProfile::Unconfined),
-        _ => bail!("invalid security profile in state: {value}"),
-    }
-}
-
-fn parse_log_mode(value: &str) -> Result<LogMode> {
-    match value {
-        "auto" => Ok(LogMode::Auto),
-        "on" => Ok(LogMode::On),
-        "off" => Ok(LogMode::Off),
-        _ => bail!("invalid log mode in state: {value}"),
     }
 }
 

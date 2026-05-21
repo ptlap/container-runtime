@@ -92,3 +92,15 @@ pub enum NetworkError {
     #[error("{program} command failed: {args}")]
     CommandFailed { program: &'static str, args: String },
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ModeError {
+    #[error("invalid network mode in state: {value}")]
+    InvalidNetworkMode { value: String },
+
+    #[error("invalid security profile in state: {value}")]
+    InvalidSecurityProfile { value: String },
+
+    #[error("invalid log mode in state: {value}")]
+    InvalidLogMode { value: String },
+}
