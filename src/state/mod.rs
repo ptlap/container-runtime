@@ -1,3 +1,4 @@
+use crate::error::StateError;
 use crate::network::release_bridge_network;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -414,16 +415,16 @@ fn runtime_log_file(id: &str) -> PathBuf {
     container_dir(Path::new(DEFAULT_STATE_ROOT), id).join("runtime.log")
 }
 
-fn validate_id(id: &str) -> Result<()> {
+fn validate_id(id: &str) -> std::result::Result<(), StateError> {
     if id.is_empty() {
-        bail!("container id must not be empty");
+        return Err(StateError::EmptyContainerId);
     }
 
     if !id
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
-        bail!("container id may only contain ASCII letters, numbers, '.', '_' and '-'");
+        return Err(StateError::InvalidContainerId);
     }
 
     Ok(())
@@ -442,10 +443,19 @@ mod tests {
 
     #[test]
     fn rejects_invalid_container_ids() {
-        assert!(validate_id("").is_err());
-        assert!(validate_id("../demo").is_err());
-        assert!(validate_id("demo/one").is_err());
-        assert!(validate_id("demo one").is_err());
+        assert!(matches!(validate_id(""), Err(StateError::EmptyContainerId)));
+        assert!(matches!(
+            validate_id("../demo"),
+            Err(StateError::InvalidContainerId)
+        ));
+        assert!(matches!(
+            validate_id("demo/one"),
+            Err(StateError::InvalidContainerId)
+        ));
+        assert!(matches!(
+            validate_id("demo one"),
+            Err(StateError::InvalidContainerId)
+        ));
         assert!(validate_id("demo_01.2-3").is_ok());
     }
 

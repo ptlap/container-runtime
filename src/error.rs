@@ -71,3 +71,12 @@ pub enum HealthcheckError {
     #[error("healthcheck {kind} must include a command")]
     MissingCommand { kind: &'static str },
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum StateError {
+    #[error("container id must not be empty")]
+    EmptyContainerId,
+
+    #[error("container id may only contain ASCII letters, numbers, '.', '_' and '-'")]
+    InvalidContainerId,
+}
