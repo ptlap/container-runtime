@@ -8,7 +8,7 @@ use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
 use container_runtime::events::{collect_counter_events, snapshot_event, EventSnapshot};
-use container_runtime::filesystem::OverlayConfig;
+use container_runtime::filesystem::resolve_overlay_config;
 use container_runtime::health;
 use container_runtime::image;
 use container_runtime::inspect_security;
@@ -626,7 +626,7 @@ fn create_container(options: RunOptions) -> Result<()> {
     let security_profile = policy::apply_security(options.security_profile, policy_profile);
     let log_mode = policy::apply_log_mode(options.log_mode, policy_profile);
     let rootfs_mode =
-        if resolve_overlay_config(&options.bundle, &config.root.path, config.crun.as_ref())?
+        if resolve_overlay_config(&options.bundle, &config.root.path, config.crun.as_ref())
             .is_some()
         {
             "overlay"
@@ -700,7 +700,7 @@ fn execute_container(
     let log_mode = policy::apply_log_mode(options.log_mode, policy_profile);
 
     let rootfs = bundle.join(&config.root.path);
-    let overlay_config = resolve_overlay_config(&bundle, &config.root.path, config.crun.as_ref())?;
+    let overlay_config = resolve_overlay_config(&bundle, &config.root.path, config.crun.as_ref());
     let rootfs_mode = if overlay_config.is_some() {
         "overlay"
     } else {
@@ -842,41 +842,6 @@ fn execute_container(
     }
 
     exit_with_process_status(exit_code, exit_signal.as_deref());
-}
-
-fn resolve_overlay_config(
-    bundle: &Path,
-    root_path: &str,
-    crun: Option<&container_runtime::spec::config::CrunConfig>,
-) -> Result<Option<OverlayConfig>> {
-    let Some(overlay) = crun.and_then(|config| config.overlay.as_ref()) else {
-        return Ok(None);
-    };
-    if !overlay.enabled {
-        return Ok(None);
-    }
-
-    let lowerdir = overlay
-        .lowerdir
-        .as_deref()
-        .map(|path| resolve_bundle_path(bundle, path))
-        .unwrap_or_else(|| resolve_bundle_path(bundle, root_path));
-
-    Ok(Some(OverlayConfig {
-        lowerdir,
-        upperdir: resolve_bundle_path(bundle, &overlay.upperdir),
-        workdir: resolve_bundle_path(bundle, &overlay.workdir),
-        mergeddir: resolve_bundle_path(bundle, &overlay.mergeddir),
-    }))
-}
-
-fn resolve_bundle_path(bundle: &Path, path: &str) -> PathBuf {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        bundle.join(path)
-    }
 }
 
 fn parse_userns_mode(value: &str) -> Result<UserNamespaceMode> {

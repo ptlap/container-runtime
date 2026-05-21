@@ -5,7 +5,7 @@ use nix::unistd::{chdir, pivot_root};
 use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 
-use crate::spec::config::Mount;
+use crate::spec::config::{CrunConfig, Mount};
 
 #[derive(Debug, Clone)]
 pub struct OverlayConfig {
@@ -13,6 +13,39 @@ pub struct OverlayConfig {
     pub upperdir: PathBuf,
     pub workdir: PathBuf,
     pub mergeddir: PathBuf,
+}
+
+pub fn resolve_overlay_config(
+    bundle: &Path,
+    root_path: &str,
+    crun: Option<&CrunConfig>,
+) -> Option<OverlayConfig> {
+    let overlay = crun.and_then(|config| config.overlay.as_ref())?;
+    if !overlay.enabled {
+        return None;
+    }
+
+    let lowerdir = overlay
+        .lowerdir
+        .as_deref()
+        .map(|path| resolve_bundle_path(bundle, path))
+        .unwrap_or_else(|| resolve_bundle_path(bundle, root_path));
+
+    Some(OverlayConfig {
+        lowerdir,
+        upperdir: resolve_bundle_path(bundle, &overlay.upperdir),
+        workdir: resolve_bundle_path(bundle, &overlay.workdir),
+        mergeddir: resolve_bundle_path(bundle, &overlay.mergeddir),
+    })
+}
+
+pub fn resolve_bundle_path(bundle: &Path, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        bundle.join(path)
+    }
 }
 
 pub fn setup_overlay_rootfs(config: &OverlayConfig) -> Result<PathBuf> {

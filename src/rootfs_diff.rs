@@ -1,3 +1,4 @@
+use crate::filesystem::resolve_bundle_path;
 use crate::spec::config::load_config;
 use crate::state;
 use anyhow::{bail, Context, Result};
@@ -186,15 +187,6 @@ fn container_path(base: &Path, path: &Path) -> Result<String> {
     }
 
     Ok(format!("/{}", rel_path.to_string_lossy()))
-}
-
-fn resolve_bundle_path(bundle: &Path, path: &str) -> PathBuf {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        bundle.join(path)
-    }
 }
 
 fn diff_kind_rank(kind: &RootfsDiffKind) -> u8 {
