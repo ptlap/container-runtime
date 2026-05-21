@@ -1,9 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use container_runtime::audit_log::{self, AuditEvent as RuntimeEvent};
-use container_runtime::cgroup::{
-    read_container_stats, read_stats, running_cgroup_path, CgroupConfig,
-};
+use container_runtime::cgroup::{read_container_stats, read_stats, running_cgroup_path};
 use container_runtime::checkpoint::{self, CheckpointOptions, RestoreOptions};
 use container_runtime::cli_runtime::{process_exit_status, should_capture_logs};
 use container_runtime::container::{run_process, ProcessConfig};
@@ -19,7 +17,7 @@ use container_runtime::modes::{
 };
 use container_runtime::namespace::effective_namespace_flags;
 use container_runtime::network::NetworkMode;
-use container_runtime::policy::{self, PolicyProfile};
+use container_runtime::policy;
 use container_runtime::rootfs_diff::{self, RootfsDiffKind};
 use container_runtime::security::SecurityProfile;
 use container_runtime::selfexec::{
@@ -618,14 +616,15 @@ fn create_container(options: RunOptions) -> Result<()> {
     }
 
     let config = load_config(options.bundle.join("config.json"))?;
-    let policy_profile = PolicyProfile::from_config(
+    let effective_policy = policy::resolve_effective_policy(
+        config.crun.as_ref(),
         config
-            .crun
+            .linux
             .as_ref()
-            .and_then(|crun| crun.profile.as_deref()),
+            .and_then(|linux| linux.resources.as_ref()),
+        options.security_profile,
+        options.log_mode,
     )?;
-    let security_profile = policy::apply_security(options.security_profile, policy_profile);
-    let log_mode = policy::apply_log_mode(options.log_mode, policy_profile);
     let rootfs_mode =
         if resolve_overlay_config(&options.bundle, &config.root.path, config.crun.as_ref())
             .is_some()
@@ -640,11 +639,11 @@ fn create_container(options: RunOptions) -> Result<()> {
         &options.bundle,
         RuntimeMetadata {
             network_mode: options.network_mode.as_str(),
-            security_profile: security_profile.as_str(),
-            log_mode: log_mode.as_str(),
+            security_profile: effective_policy.security_profile.as_str(),
+            log_mode: effective_policy.log_mode.as_str(),
             userns_mode: options.userns_mode.as_str(),
             rootfs_mode,
-            policy_profile: policy_profile.as_str(),
+            policy_profile: effective_policy.profile.as_str(),
             tty: options.tty,
         },
     )?;
@@ -691,14 +690,18 @@ fn execute_container(
 
     let config_path = bundle.join("config.json");
     let config = load_config(config_path)?;
-    let policy_profile = PolicyProfile::from_config(
+    let effective_policy = policy::resolve_effective_policy(
+        config.crun.as_ref(),
         config
-            .crun
+            .linux
             .as_ref()
-            .and_then(|crun| crun.profile.as_deref()),
+            .and_then(|linux| linux.resources.as_ref()),
+        options.security_profile,
+        options.log_mode,
     )?;
-    let security_profile = policy::apply_security(options.security_profile, policy_profile);
-    let log_mode = policy::apply_log_mode(options.log_mode, policy_profile);
+    let security_profile = effective_policy.security_profile;
+    let log_mode = effective_policy.log_mode;
+    let policy_profile = effective_policy.profile;
 
     let rootfs = bundle.join(&config.root.path);
     let overlay_config = resolve_overlay_config(&bundle, &config.root.path, config.crun.as_ref());
@@ -735,15 +738,6 @@ fn execute_container(
     println!("rootfs mode: {rootfs_mode}");
     println!("policy profile: {}", policy_profile.as_str());
 
-    let explicit_cgroup_config = config.linux.as_ref().and_then(|linux| {
-        linux.resources.as_ref().map(|resources| CgroupConfig {
-            memory_limit: resources.memory.as_ref().and_then(|m| m.limit),
-            cpu_quota: resources.cpu.as_ref().and_then(|c| c.quota),
-            cpu_period: resources.cpu.as_ref().and_then(|c| c.period),
-            pids_limit: resources.pids.as_ref().and_then(|p| p.limit),
-        })
-    });
-    let cgroup_config = policy::apply_cgroup(explicit_cgroup_config, policy_profile);
     let masked_paths = config
         .linux
         .as_ref()
@@ -811,7 +805,7 @@ fn execute_container(
         .readonly_paths(readonly_paths)
         .log_path(capture_logs.then_some(log_path.as_path()))
         .flags(flags)
-        .cgroup_config(cgroup_config)
+        .cgroup_config(effective_policy.cgroup_config)
         .network_mode(network_mode)
         .security_profile(security_profile)
         .userns_mode(userns_mode)

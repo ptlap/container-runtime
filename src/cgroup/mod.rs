@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup/container-runtime";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CgroupConfig {
     pub memory_limit: Option<i64>,
     pub cpu_quota: Option<i64>,
