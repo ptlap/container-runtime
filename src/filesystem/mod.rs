@@ -1,10 +1,11 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use nix::unistd::{chdir, pivot_root};
 use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 
+use crate::error::FilesystemError;
 use crate::spec::config::{CrunConfig, Mount};
 
 #[derive(Debug, Clone)]
@@ -227,7 +228,7 @@ fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
     let source = mount_config
         .source
         .as_deref()
-        .context("bind mount source is required")?;
+        .ok_or(FilesystemError::MissingBindMountSource)?;
     let source_path = Path::new(source);
     let source_metadata = fs::metadata(source_path)
         .with_context(|| format!("failed to stat bind mount source: {source}"))?;
@@ -281,10 +282,10 @@ fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
 fn container_mount_destination(rootfs: &Path, destination: &str) -> Result<PathBuf> {
     let destination = Path::new(destination);
     if !destination.is_absolute() {
-        anyhow::bail!(
-            "mount destination must be absolute: {}",
-            destination.display()
-        );
+        return Err(FilesystemError::MountDestinationNotAbsolute {
+            path: destination.display().to_string(),
+        }
+        .into());
     }
 
     let mut relative = PathBuf::new();
@@ -293,22 +294,22 @@ fn container_mount_destination(rootfs: &Path, destination: &str) -> Result<PathB
             Component::RootDir | Component::CurDir => {}
             Component::Normal(part) => relative.push(part),
             Component::ParentDir => {
-                bail!(
-                    "mount destination must not escape rootfs: {}",
-                    destination.display()
-                );
+                return Err(FilesystemError::MountDestinationEscapesRootfs {
+                    path: destination.display().to_string(),
+                }
+                .into());
             }
             Component::Prefix(_) => {
-                bail!(
-                    "mount destination contains unsupported prefix: {}",
-                    destination.display()
-                );
+                return Err(FilesystemError::MountDestinationUnsupportedPrefix {
+                    path: destination.display().to_string(),
+                }
+                .into());
             }
         }
     }
 
     if relative.as_os_str().is_empty() {
-        bail!("mount destination must not be container root");
+        return Err(FilesystemError::MountDestinationIsContainerRoot.into());
     }
 
     Ok(rootfs.join(relative))
@@ -317,10 +318,10 @@ fn container_mount_destination(rootfs: &Path, destination: &str) -> Result<PathB
 fn prepare_bind_mount_destination(destination: &Path, source_is_dir: bool) -> Result<()> {
     if source_is_dir {
         if destination.exists() && !destination.is_dir() {
-            bail!(
-                "bind mount destination exists but is not a directory: {}",
-                destination.display()
-            );
+            return Err(FilesystemError::BindDestinationNotDirectory {
+                path: destination.display().to_string(),
+            }
+            .into());
         }
 
         fs::create_dir_all(destination).with_context(|| {
@@ -342,10 +343,10 @@ fn prepare_bind_mount_destination(destination: &Path, source_is_dir: bool) -> Re
     }
 
     if destination.exists() && destination.is_dir() {
-        bail!(
-            "bind mount destination exists but is a directory: {}",
-            destination.display()
-        );
+        return Err(FilesystemError::BindDestinationIsDirectory {
+            path: destination.display().to_string(),
+        }
+        .into());
     }
 
     File::create(destination).with_context(|| {
@@ -457,7 +458,10 @@ mod tests {
         let error = container_mount_destination(Path::new("/tmp/rootfs"), "/../../host")
             .expect_err("escaping destination should be rejected");
 
-        assert!(error.to_string().contains("must not escape rootfs"));
+        assert!(matches!(
+            error.downcast_ref::<FilesystemError>(),
+            Some(FilesystemError::MountDestinationEscapesRootfs { .. })
+        ));
     }
 
     #[test]
@@ -465,7 +469,10 @@ mod tests {
         let error = container_mount_destination(Path::new("/tmp/rootfs"), "/")
             .expect_err("root destination should be rejected");
 
-        assert!(error.to_string().contains("must not be container root"));
+        assert!(matches!(
+            error.downcast_ref::<FilesystemError>(),
+            Some(FilesystemError::MountDestinationIsContainerRoot)
+        ));
     }
 
     #[test]

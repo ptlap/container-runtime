@@ -110,3 +110,27 @@ pub enum PolicyError {
     #[error("unsupported crun.profile: {value}")]
     UnsupportedProfile { value: String },
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum FilesystemError {
+    #[error("mount destination must be absolute: {path}")]
+    MountDestinationNotAbsolute { path: String },
+
+    #[error("mount destination must not escape rootfs: {path}")]
+    MountDestinationEscapesRootfs { path: String },
+
+    #[error("mount destination contains unsupported prefix: {path}")]
+    MountDestinationUnsupportedPrefix { path: String },
+
+    #[error("mount destination must not be container root")]
+    MountDestinationIsContainerRoot,
+
+    #[error("bind mount source is required")]
+    MissingBindMountSource,
+
+    #[error("bind mount destination exists but is not a directory: {path}")]
+    BindDestinationNotDirectory { path: String },
+
+    #[error("bind mount destination exists but is a directory: {path}")]
+    BindDestinationIsDirectory { path: String },
+}
