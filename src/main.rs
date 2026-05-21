@@ -5,7 +5,6 @@ use container_runtime::cgroup::{read_container_stats, read_stats, running_cgroup
 use container_runtime::checkpoint::{self, CheckpointOptions, RestoreOptions};
 use container_runtime::cli_runtime::{process_exit_status, should_capture_logs};
 use container_runtime::container::{run_process, ProcessConfig};
-use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
 use container_runtime::error::LifecycleError;
 use container_runtime::events::{collect_counter_events, snapshot_event, EventSnapshot};
@@ -1132,47 +1131,15 @@ fn list_containers(json: bool) -> Result<()> {
 }
 
 fn exec_container(id: &str, args: &[String], tty: bool) -> Result<()> {
-    let state = state::load_current(id)?;
-    if state.status != ContainerStatus::Running {
-        bail!("container {id} is not running");
-    }
+    let report = lifecycle::exec(id, args, tty)?;
 
-    let Some(pid) = state.pid else {
-        bail!("container {id} has no pid");
-    };
-
-    let config = load_config(PathBuf::from(&state.bundle).join("config.json"))?;
-
-    let exit = exec_in_container(ExecConfig {
-        target_pid: pid,
-        args,
-        env: &config.process.env,
-        cwd: config.process.cwd.as_deref(),
-        cgroup_path: state.cgroup_path.as_deref(),
-        tty,
-    })?;
-
-    let exit_code = exit.code;
-    let exit_signal = exit.signal.clone();
-
-    match (exit_code, exit_signal.as_deref()) {
+    match (report.code, report.signal.as_deref()) {
         (Some(code), _) => println!("exec process exited with code: {code}"),
         (None, Some(signal)) => println!("exec process killed by signal: {signal}"),
         (None, None) => println!("exec process ended without exit status"),
     }
 
-    let mut event = RuntimeEvent::new(id, "exec", "exec");
-    if let Some(code) = exit_code.and_then(|code| u64::try_from(code).ok()) {
-        event = event.with_value(code);
-    }
-    if exit_signal.is_some() {
-        event = event.with_status("signaled");
-    } else {
-        event = event.with_status("exited");
-    }
-    audit_log::append(&event)?;
-
-    exit_with_process_status(exit_code, exit_signal.as_deref());
+    exit_with_process_status(report.code, report.signal.as_deref());
 }
 
 fn exit_with_process_status(code: Option<i32>, signal: Option<&str>) -> ! {

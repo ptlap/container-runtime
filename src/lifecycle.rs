@@ -3,7 +3,8 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::audit_log;
+use crate::audit_log::{self, AuditEvent};
+use crate::container_exec::{exec_in_container, ExecConfig};
 use crate::error::LifecycleError;
 use crate::filesystem::resolve_rootfs;
 use crate::modes::LogMode;
@@ -32,6 +33,12 @@ pub struct KillReport {
     pub pid: i32,
     pub signal: String,
     pub signal_number: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecReport {
+    pub code: Option<i32>,
+    pub signal: Option<String>,
 }
 
 pub fn record_run_created(id: &str) -> Result<()> {
@@ -93,6 +100,48 @@ pub fn send_container_signal(id: &str, signal: &str) -> Result<KillReport> {
         signal: signal.to_string(),
         signal_number,
     })
+}
+
+pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
+    let state = state::load_current(id)?;
+    if state.status != ContainerStatus::Running {
+        return Err(LifecycleError::ContainerNotRunning { id: id.to_string() }.into());
+    }
+
+    let pid = state
+        .pid
+        .ok_or_else(|| LifecycleError::ContainerHasNoPid { id: id.to_string() })?;
+    let config = load_config(Path::new(&state.bundle).join("config.json"))?;
+
+    let exit = exec_in_container(ExecConfig {
+        target_pid: pid,
+        args,
+        env: &config.process.env,
+        cwd: config.process.cwd.as_deref(),
+        cgroup_path: state.cgroup_path.as_deref(),
+        tty,
+    })?;
+
+    let report = ExecReport {
+        code: exit.code,
+        signal: exit.signal,
+    };
+    audit_exec(id, &report)?;
+
+    Ok(report)
+}
+
+fn audit_exec(id: &str, report: &ExecReport) -> Result<()> {
+    let mut event = AuditEvent::new(id, "exec", "exec");
+    if let Some(code) = report.code.and_then(|code| u64::try_from(code).ok()) {
+        event = event.with_value(code);
+    }
+    if report.signal.is_some() {
+        event = event.with_status("signaled");
+    } else {
+        event = event.with_status("exited");
+    }
+    audit_log::append(&event)
 }
 
 pub fn wait_for_stopped(id: &str, timeout: Duration) -> Result<bool> {
@@ -158,5 +207,20 @@ mod tests {
             error.to_string(),
             "container demo did not stop after SIGKILL"
         );
+    }
+
+    #[test]
+    fn audits_exec_report_statuses() {
+        let exited = ExecReport {
+            code: Some(0),
+            signal: None,
+        };
+        assert_eq!(exited.code, Some(0));
+
+        let signaled = ExecReport {
+            code: None,
+            signal: Some("SIGTERM".to_string()),
+        };
+        assert_eq!(signaled.signal.as_deref(), Some("SIGTERM"));
     }
 }
