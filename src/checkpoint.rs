@@ -248,23 +248,14 @@ fn default_checkpoint_dir(id: &str) -> PathBuf {
 }
 
 fn validate_checkpoint_id(id: &str) -> Result<()> {
-    if id.is_empty() {
-        bail!("container id must not be empty");
-    }
-
-    if !id
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        bail!("container id may only contain ASCII letters, numbers, '.', '_' and '-'");
-    }
-
+    state::validate_id(id)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::StateError;
 
     #[test]
     fn builds_checkpoint_command_with_leave_running() {
@@ -299,9 +290,25 @@ mod tests {
 
     #[test]
     fn rejects_invalid_checkpoint_ids() {
-        assert!(validate_checkpoint_id("").is_err());
-        assert!(validate_checkpoint_id("../demo").is_err());
-        assert!(validate_checkpoint_id("demo/one").is_err());
+        let empty = validate_checkpoint_id("").expect_err("empty id should be rejected");
+        assert!(matches!(
+            empty.downcast_ref::<StateError>(),
+            Some(StateError::EmptyContainerId)
+        ));
+
+        let traversal =
+            validate_checkpoint_id("../demo").expect_err("traversal id should be rejected");
+        assert!(matches!(
+            traversal.downcast_ref::<StateError>(),
+            Some(StateError::InvalidContainerId)
+        ));
+
+        let slash = validate_checkpoint_id("demo/one").expect_err("slash id should be rejected");
+        assert!(matches!(
+            slash.downcast_ref::<StateError>(),
+            Some(StateError::InvalidContainerId)
+        ));
+
         assert!(validate_checkpoint_id("demo_01.2-3").is_ok());
     }
 }

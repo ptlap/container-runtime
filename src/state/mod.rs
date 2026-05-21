@@ -415,7 +415,7 @@ fn runtime_log_file(id: &str) -> PathBuf {
     container_dir(Path::new(DEFAULT_STATE_ROOT), id).join("runtime.log")
 }
 
-fn validate_id(id: &str) -> std::result::Result<(), StateError> {
+pub(crate) fn validate_id(id: &str) -> std::result::Result<(), StateError> {
     if id.is_empty() {
         return Err(StateError::EmptyContainerId);
     }
