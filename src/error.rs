@@ -104,3 +104,9 @@ pub enum ModeError {
     #[error("invalid log mode in state: {value}")]
     InvalidLogMode { value: String },
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PolicyError {
+    #[error("unsupported crun.profile: {value}")]
+    UnsupportedProfile { value: String },
+}

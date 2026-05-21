@@ -16,6 +16,7 @@ use container_runtime::modes::{
 };
 use container_runtime::namespace::namespace_flags;
 use container_runtime::network::NetworkMode;
+use container_runtime::policy::{self, PolicyProfile};
 use container_runtime::rootfs_diff::{self, RootfsDiffKind};
 use container_runtime::security::SecurityProfile;
 use container_runtime::selfexec::{
@@ -260,13 +261,6 @@ enum CliUsernsMode {
     Private,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PolicyProfile {
-    None,
-    Restricted,
-    Debug,
-}
-
 impl From<CliNetworkMode> for NetworkMode {
     fn from(value: CliNetworkMode) -> Self {
         match value {
@@ -292,25 +286,6 @@ impl From<CliLogMode> for LogMode {
             CliLogMode::Auto => Self::Auto,
             CliLogMode::On => Self::On,
             CliLogMode::Off => Self::Off,
-        }
-    }
-}
-
-impl PolicyProfile {
-    fn from_config(value: Option<&str>) -> Result<Self> {
-        match value {
-            None => Ok(Self::None),
-            Some("restricted") => Ok(Self::Restricted),
-            Some("debug") => Ok(Self::Debug),
-            Some(value) => bail!("unsupported crun.profile: {value}"),
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Restricted => "restricted",
-            Self::Debug => "debug",
         }
     }
 }
@@ -647,8 +622,8 @@ fn create_container(options: RunOptions) -> Result<()> {
             .as_ref()
             .and_then(|crun| crun.profile.as_deref()),
     )?;
-    let security_profile = apply_profile_security(options.security_profile, policy_profile);
-    let log_mode = apply_profile_log_mode(options.log_mode, policy_profile);
+    let security_profile = policy::apply_security(options.security_profile, policy_profile);
+    let log_mode = policy::apply_log_mode(options.log_mode, policy_profile);
     let rootfs_mode =
         if resolve_overlay_config(&options.bundle, &config.root.path, config.crun.as_ref())?
             .is_some()
@@ -720,8 +695,8 @@ fn execute_container(
             .as_ref()
             .and_then(|crun| crun.profile.as_deref()),
     )?;
-    let security_profile = apply_profile_security(options.security_profile, policy_profile);
-    let log_mode = apply_profile_log_mode(options.log_mode, policy_profile);
+    let security_profile = policy::apply_security(options.security_profile, policy_profile);
+    let log_mode = policy::apply_log_mode(options.log_mode, policy_profile);
 
     let rootfs = bundle.join(&config.root.path);
     let overlay_config = resolve_overlay_config(&bundle, &config.root.path, config.crun.as_ref())?;
@@ -769,7 +744,7 @@ fn execute_container(
             pids_limit: resources.pids.as_ref().and_then(|p| p.limit),
         })
     });
-    let cgroup_config = apply_profile_cgroup(explicit_cgroup_config, policy_profile);
+    let cgroup_config = policy::apply_cgroup(explicit_cgroup_config, policy_profile);
     let masked_paths = config
         .linux
         .as_ref()
@@ -901,63 +876,6 @@ fn resolve_bundle_path(bundle: &Path, path: &str) -> PathBuf {
     } else {
         bundle.join(path)
     }
-}
-
-fn apply_profile_security(
-    security_profile: SecurityProfile,
-    policy_profile: PolicyProfile,
-) -> SecurityProfile {
-    match policy_profile {
-        PolicyProfile::Restricted => SecurityProfile::Default,
-        PolicyProfile::Debug if security_profile == SecurityProfile::Default => {
-            SecurityProfile::Unconfined
-        }
-        _ => security_profile,
-    }
-}
-
-fn apply_profile_log_mode(log_mode: LogMode, policy_profile: PolicyProfile) -> LogMode {
-    match policy_profile {
-        PolicyProfile::Debug if matches!(log_mode, LogMode::Auto) => LogMode::On,
-        _ => log_mode,
-    }
-}
-
-fn apply_profile_cgroup(
-    explicit: Option<CgroupConfig>,
-    policy_profile: PolicyProfile,
-) -> Option<CgroupConfig> {
-    let defaults = match policy_profile {
-        PolicyProfile::Restricted => CgroupConfig {
-            memory_limit: Some(256 * 1024 * 1024),
-            cpu_quota: None,
-            cpu_period: None,
-            pids_limit: Some(64),
-        },
-        _ => CgroupConfig {
-            memory_limit: None,
-            cpu_quota: None,
-            cpu_period: None,
-            pids_limit: None,
-        },
-    };
-
-    let merged = if let Some(explicit) = explicit {
-        CgroupConfig {
-            memory_limit: explicit.memory_limit.or(defaults.memory_limit),
-            cpu_quota: explicit.cpu_quota.or(defaults.cpu_quota),
-            cpu_period: explicit.cpu_period.or(defaults.cpu_period),
-            pids_limit: explicit.pids_limit.or(defaults.pids_limit),
-        }
-    } else {
-        defaults
-    };
-
-    (merged.memory_limit.is_some()
-        || merged.cpu_quota.is_some()
-        || merged.cpu_period.is_some()
-        || merged.pids_limit.is_some())
-    .then_some(merged)
 }
 
 fn parse_userns_mode(value: &str) -> Result<UserNamespaceMode> {
