@@ -1147,19 +1147,11 @@ fn exit_with_process_status(code: Option<i32>, signal: Option<&str>) -> ! {
 }
 
 fn show_logs(id: &str, follow: bool) -> Result<()> {
-    let state = state::load_current(id)?;
-    let log_path = state
-        .log_path
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or(state::log_path(id)?);
-
     if follow {
+        let log_path = lifecycle::log_path(id)?;
         follow_logs(&log_path)?;
     } else {
-        let content = fs::read_to_string(&log_path)
-            .with_context(|| format!("failed to read log file: {}", log_path.display()))?;
-        print!("{content}");
+        print!("{}", lifecycle::read_logs(id)?);
     }
 
     Ok(())

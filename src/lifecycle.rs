@@ -1,5 +1,7 @@
+use anyhow::Context;
 use anyhow::Result;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -142,6 +144,22 @@ pub fn delete(id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn log_path(id: &str) -> Result<PathBuf> {
+    let state = state::load_current(id)?;
+    state
+        .log_path
+        .as_deref()
+        .map(PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(|| state::log_path(id))
+}
+
+pub fn read_logs(id: &str) -> Result<String> {
+    let log_path = log_path(id)?;
+    fs::read_to_string(&log_path)
+        .with_context(|| format!("failed to read log file: {}", log_path.display()))
+}
+
 fn audit_exec(id: &str, report: &ExecReport) -> Result<()> {
     let mut event = AuditEvent::new(id, "exec", "exec");
     if let Some(code) = report.code.and_then(|code| u64::try_from(code).ok()) {
@@ -247,5 +265,16 @@ mod tests {
         assert_eq!(report.id, "demo");
         assert_eq!(report.pid, 42);
         assert_eq!(report.signal_number, 15);
+    }
+
+    #[test]
+    fn exec_report_keeps_exit_details() {
+        let report = ExecReport {
+            code: Some(2),
+            signal: None,
+        };
+
+        assert_eq!(report.code, Some(2));
+        assert!(report.signal.is_none());
     }
 }
