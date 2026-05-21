@@ -1,4 +1,5 @@
 use crate::cgroup::{Cgroup, CgroupConfig};
+use crate::error::ContainerError;
 use crate::filesystem::{apply_oci_linux_paths, setup_overlay_rootfs, setup_rootfs, OverlayConfig};
 use crate::network::{
     allocate_bridge_network, cleanup_nat, cleanup_veth_host, release_bridge_network,
@@ -8,11 +9,12 @@ use crate::security::{self, SecurityProfile};
 use crate::spec::config::{rlimit_resource, LinuxRlimit, Mount, ProcessUser};
 use crate::userns::{write_uid_gid_maps, UserNamespaceMode};
 use anyhow::{bail, Context, Result};
+use nix::fcntl::OFlag;
 use nix::libc;
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::wait::{waitpid, WaitStatus};
-use nix::unistd::{chdir, close, execvp, fork, pipe, read, setsid, write, ForkResult};
+use nix::unistd::{chdir, close, execvp, fork, pipe2, read, setsid, write, ForkResult};
 use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -53,6 +55,200 @@ pub struct ProcessConfig<'a> {
     pub tty: bool,
 }
 
+impl<'a> ProcessConfig<'a> {
+    pub fn builder() -> ProcessConfigBuilder<'a> {
+        ProcessConfigBuilder::default()
+    }
+}
+
+pub struct ProcessConfigBuilder<'a> {
+    id: Option<&'a str>,
+    hostname: Option<&'a str>,
+    args: Option<&'a [String]>,
+    env: Option<&'a [String]>,
+    cwd: Option<&'a str>,
+    rootfs: Option<&'a Path>,
+    overlay_config: Option<OverlayConfig>,
+    readonly_rootfs: bool,
+    mounts: Option<&'a [Mount]>,
+    process_user: Option<&'a ProcessUser>,
+    rlimits: Option<&'a [LinuxRlimit]>,
+    masked_paths: Option<&'a [String]>,
+    readonly_paths: Option<&'a [String]>,
+    log_path: Option<&'a Path>,
+    flags: CloneFlags,
+    cgroup_config: Option<CgroupConfig>,
+    network_mode: Option<NetworkMode>,
+    security_profile: Option<SecurityProfile>,
+    userns_mode: Option<UserNamespaceMode>,
+    tty: bool,
+}
+
+impl Default for ProcessConfigBuilder<'_> {
+    fn default() -> Self {
+        Self {
+            id: None,
+            hostname: None,
+            args: None,
+            env: None,
+            cwd: None,
+            rootfs: None,
+            overlay_config: None,
+            readonly_rootfs: false,
+            mounts: None,
+            process_user: None,
+            rlimits: None,
+            masked_paths: None,
+            readonly_paths: None,
+            log_path: None,
+            flags: CloneFlags::empty(),
+            cgroup_config: None,
+            network_mode: None,
+            security_profile: None,
+            userns_mode: None,
+            tty: false,
+        }
+    }
+}
+
+impl<'a> ProcessConfigBuilder<'a> {
+    pub fn id(mut self, id: &'a str) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    pub fn hostname(mut self, hostname: Option<&'a str>) -> Self {
+        self.hostname = hostname;
+        self
+    }
+
+    pub fn args(mut self, args: &'a [String]) -> Self {
+        self.args = Some(args);
+        self
+    }
+
+    pub fn env(mut self, env: &'a [String]) -> Self {
+        self.env = Some(env);
+        self
+    }
+
+    pub fn cwd(mut self, cwd: Option<&'a str>) -> Self {
+        self.cwd = cwd;
+        self
+    }
+
+    pub fn rootfs(mut self, rootfs: &'a Path) -> Self {
+        self.rootfs = Some(rootfs);
+        self
+    }
+
+    pub fn overlay_config(mut self, overlay_config: Option<OverlayConfig>) -> Self {
+        self.overlay_config = overlay_config;
+        self
+    }
+
+    pub fn readonly_rootfs(mut self, readonly_rootfs: bool) -> Self {
+        self.readonly_rootfs = readonly_rootfs;
+        self
+    }
+
+    pub fn mounts(mut self, mounts: &'a [Mount]) -> Self {
+        self.mounts = Some(mounts);
+        self
+    }
+
+    pub fn process_user(mut self, process_user: Option<&'a ProcessUser>) -> Self {
+        self.process_user = process_user;
+        self
+    }
+
+    pub fn rlimits(mut self, rlimits: &'a [LinuxRlimit]) -> Self {
+        self.rlimits = Some(rlimits);
+        self
+    }
+
+    pub fn masked_paths(mut self, masked_paths: &'a [String]) -> Self {
+        self.masked_paths = Some(masked_paths);
+        self
+    }
+
+    pub fn readonly_paths(mut self, readonly_paths: &'a [String]) -> Self {
+        self.readonly_paths = Some(readonly_paths);
+        self
+    }
+
+    pub fn log_path(mut self, log_path: Option<&'a Path>) -> Self {
+        self.log_path = log_path;
+        self
+    }
+
+    pub fn flags(mut self, flags: CloneFlags) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    pub fn cgroup_config(mut self, cgroup_config: Option<CgroupConfig>) -> Self {
+        self.cgroup_config = cgroup_config;
+        self
+    }
+
+    pub fn network_mode(mut self, network_mode: NetworkMode) -> Self {
+        self.network_mode = Some(network_mode);
+        self
+    }
+
+    pub fn security_profile(mut self, security_profile: SecurityProfile) -> Self {
+        self.security_profile = Some(security_profile);
+        self
+    }
+
+    pub fn userns_mode(mut self, userns_mode: UserNamespaceMode) -> Self {
+        self.userns_mode = Some(userns_mode);
+        self
+    }
+
+    pub fn tty(mut self, tty: bool) -> Self {
+        self.tty = tty;
+        self
+    }
+
+    pub fn build(self) -> std::result::Result<ProcessConfig<'a>, ContainerError> {
+        let args = self
+            .args
+            .ok_or(ContainerError::MissingProcessConfigField { field: "args" })?;
+        if args.is_empty() {
+            return Err(ContainerError::EmptyProcessArgs);
+        }
+
+        Ok(ProcessConfig {
+            id: self
+                .id
+                .ok_or(ContainerError::MissingProcessConfigField { field: "id" })?,
+            hostname: self.hostname,
+            args,
+            env: self.env.unwrap_or(&[]),
+            cwd: self.cwd,
+            rootfs: self
+                .rootfs
+                .ok_or(ContainerError::MissingProcessConfigField { field: "rootfs" })?,
+            overlay_config: self.overlay_config,
+            readonly_rootfs: self.readonly_rootfs,
+            mounts: self.mounts.unwrap_or(&[]),
+            process_user: self.process_user,
+            rlimits: self.rlimits.unwrap_or(&[]),
+            masked_paths: self.masked_paths.unwrap_or(&[]),
+            readonly_paths: self.readonly_paths.unwrap_or(&[]),
+            log_path: self.log_path,
+            flags: self.flags,
+            cgroup_config: self.cgroup_config,
+            network_mode: self.network_mode.unwrap_or(NetworkMode::None),
+            security_profile: self.security_profile.unwrap_or(SecurityProfile::Default),
+            userns_mode: self.userns_mode.unwrap_or(UserNamespaceMode::Host),
+            tty: self.tty,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StartedProcess {
     pub pid: i32,
@@ -78,6 +274,169 @@ struct ChildConfig<'a> {
     userns_mode: UserNamespaceMode,
     child_flags: CloneFlags,
     is_rootless: bool,
+}
+
+impl<'a> ChildConfig<'a> {
+    fn builder() -> ChildConfigBuilder<'a> {
+        ChildConfigBuilder::default()
+    }
+}
+
+struct ChildConfigBuilder<'a> {
+    args: Option<&'a [String]>,
+    env: Option<&'a [String]>,
+    cwd: Option<&'a str>,
+    hostname: Option<&'a str>,
+    rootfs: Option<&'a Path>,
+    overlay_config: Option<OverlayConfig>,
+    readonly_rootfs: bool,
+    mounts: Option<&'a [Mount]>,
+    process_user: Option<&'a ProcessUser>,
+    rlimits: Option<&'a [LinuxRlimit]>,
+    masked_paths: Option<&'a [String]>,
+    readonly_paths: Option<&'a [String]>,
+    network_mode: Option<NetworkMode>,
+    security_profile: Option<SecurityProfile>,
+    userns_mode: Option<UserNamespaceMode>,
+    child_flags: CloneFlags,
+    is_rootless: bool,
+}
+
+impl Default for ChildConfigBuilder<'_> {
+    fn default() -> Self {
+        Self {
+            args: None,
+            env: None,
+            cwd: None,
+            hostname: None,
+            rootfs: None,
+            overlay_config: None,
+            readonly_rootfs: false,
+            mounts: None,
+            process_user: None,
+            rlimits: None,
+            masked_paths: None,
+            readonly_paths: None,
+            network_mode: None,
+            security_profile: None,
+            userns_mode: None,
+            child_flags: CloneFlags::empty(),
+            is_rootless: false,
+        }
+    }
+}
+
+impl<'a> ChildConfigBuilder<'a> {
+    fn args(mut self, args: &'a [String]) -> Self {
+        self.args = Some(args);
+        self
+    }
+
+    fn env(mut self, env: &'a [String]) -> Self {
+        self.env = Some(env);
+        self
+    }
+
+    fn cwd(mut self, cwd: Option<&'a str>) -> Self {
+        self.cwd = cwd;
+        self
+    }
+
+    fn hostname(mut self, hostname: Option<&'a str>) -> Self {
+        self.hostname = hostname;
+        self
+    }
+
+    fn rootfs(mut self, rootfs: &'a Path) -> Self {
+        self.rootfs = Some(rootfs);
+        self
+    }
+
+    fn overlay_config(mut self, overlay_config: Option<OverlayConfig>) -> Self {
+        self.overlay_config = overlay_config;
+        self
+    }
+
+    fn readonly_rootfs(mut self, readonly_rootfs: bool) -> Self {
+        self.readonly_rootfs = readonly_rootfs;
+        self
+    }
+
+    fn mounts(mut self, mounts: &'a [Mount]) -> Self {
+        self.mounts = Some(mounts);
+        self
+    }
+
+    fn process_user(mut self, process_user: Option<&'a ProcessUser>) -> Self {
+        self.process_user = process_user;
+        self
+    }
+
+    fn rlimits(mut self, rlimits: &'a [LinuxRlimit]) -> Self {
+        self.rlimits = Some(rlimits);
+        self
+    }
+
+    fn masked_paths(mut self, masked_paths: &'a [String]) -> Self {
+        self.masked_paths = Some(masked_paths);
+        self
+    }
+
+    fn readonly_paths(mut self, readonly_paths: &'a [String]) -> Self {
+        self.readonly_paths = Some(readonly_paths);
+        self
+    }
+
+    fn network_mode(mut self, network_mode: NetworkMode) -> Self {
+        self.network_mode = Some(network_mode);
+        self
+    }
+
+    fn security_profile(mut self, security_profile: SecurityProfile) -> Self {
+        self.security_profile = Some(security_profile);
+        self
+    }
+
+    fn userns_mode(mut self, userns_mode: UserNamespaceMode) -> Self {
+        self.userns_mode = Some(userns_mode);
+        self
+    }
+
+    fn child_flags(mut self, child_flags: CloneFlags) -> Self {
+        self.child_flags = child_flags;
+        self
+    }
+
+    fn rootless(mut self, is_rootless: bool) -> Self {
+        self.is_rootless = is_rootless;
+        self
+    }
+
+    fn build(self) -> std::result::Result<ChildConfig<'a>, ContainerError> {
+        Ok(ChildConfig {
+            args: self
+                .args
+                .ok_or(ContainerError::MissingProcessConfigField { field: "args" })?,
+            env: self.env.unwrap_or(&[]),
+            cwd: self.cwd,
+            hostname: self.hostname,
+            rootfs: self
+                .rootfs
+                .ok_or(ContainerError::MissingProcessConfigField { field: "rootfs" })?,
+            overlay_config: self.overlay_config,
+            readonly_rootfs: self.readonly_rootfs,
+            mounts: self.mounts.unwrap_or(&[]),
+            process_user: self.process_user,
+            rlimits: self.rlimits.unwrap_or(&[]),
+            masked_paths: self.masked_paths.unwrap_or(&[]),
+            readonly_paths: self.readonly_paths.unwrap_or(&[]),
+            network_mode: self.network_mode.unwrap_or(NetworkMode::None),
+            security_profile: self.security_profile.unwrap_or(SecurityProfile::Default),
+            userns_mode: self.userns_mode.unwrap_or(UserNamespaceMode::Host),
+            child_flags: self.child_flags,
+            is_rootless: self.is_rootless,
+        })
+    }
 }
 
 struct ParentResources {
@@ -138,7 +497,7 @@ pub fn run_process(
     on_started: &mut dyn FnMut(StartedProcess) -> Result<()>,
 ) -> Result<ProcessExit> {
     if config.args.is_empty() {
-        bail!("process args is empty");
+        return Err(ContainerError::EmptyProcessArgs.into());
     }
 
     let network_mode = config.network_mode.to_effective();
@@ -146,12 +505,13 @@ pub fn run_process(
         warn!("bridge networking is not supported in rootless mode, falling back to none");
     }
 
-    let (read_fd, write_fd) = pipe().context("failed to create sync pipe")?;
-    let (error_read_fd, error_write_fd) = pipe().context("failed to create child error pipe")?;
+    let (read_fd, write_fd) = cloexec_pipe().context("failed to create sync pipe")?;
+    let (error_read_fd, error_write_fd) =
+        cloexec_pipe().context("failed to create child error pipe")?;
     let (userns_ready_read_fd, userns_ready_write_fd) =
-        pipe().context("failed to create user namespace ready pipe")?;
+        cloexec_pipe().context("failed to create user namespace ready pipe")?;
     let (userns_mapped_read_fd, userns_mapped_write_fd) =
-        pipe().context("failed to create user namespace mapped pipe")?;
+        cloexec_pipe().context("failed to create user namespace mapped pipe")?;
     let log_pipe = create_log_pipe(config.log_path)?;
     let (mut log_write_fd, log_helper) = start_log_helper(
         log_pipe,
@@ -222,7 +582,7 @@ pub fn run_process(
             close(userns_mapped_write_fd).ok();
 
             if let Some(pty) = pty_manager.as_ref() {
-                let slave_fd = pty.slave_fd().context("pty slave is closed")?;
+                let slave_fd = pty.slave_fd().context(ContainerError::PtySlaveClosed)?;
                 setsid().context("failed to setsid for container process")?;
                 unsafe {
                     if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) == -1 {
@@ -247,25 +607,25 @@ pub fn run_process(
             }
 
             let is_root = nix::unistd::getuid().is_root();
-            let child_config = ChildConfig {
-                args: config.args,
-                env: config.env,
-                cwd: config.cwd,
-                hostname: config.hostname,
-                rootfs: config.rootfs,
-                overlay_config: config.overlay_config,
-                readonly_rootfs: config.readonly_rootfs,
-                mounts: config.mounts,
-                process_user: config.process_user,
-                rlimits: config.rlimits,
-                masked_paths: config.masked_paths,
-                readonly_paths: config.readonly_paths,
-                network_mode,
-                security_profile: config.security_profile,
-                userns_mode: config.userns_mode,
-                child_flags,
-                is_rootless: !is_root,
-            };
+            let child_config = ChildConfig::builder()
+                .args(config.args)
+                .env(config.env)
+                .cwd(config.cwd)
+                .hostname(config.hostname)
+                .rootfs(config.rootfs)
+                .overlay_config(config.overlay_config)
+                .readonly_rootfs(config.readonly_rootfs)
+                .mounts(config.mounts)
+                .process_user(config.process_user)
+                .rlimits(config.rlimits)
+                .masked_paths(config.masked_paths)
+                .readonly_paths(config.readonly_paths)
+                .network_mode(network_mode)
+                .security_profile(config.security_profile)
+                .userns_mode(config.userns_mode)
+                .child_flags(child_flags)
+                .rootless(!is_root)
+                .build()?;
 
             if let Err(error) = run_child(
                 child_config,
@@ -413,7 +773,11 @@ fn create_log_pipe(log_path: Option<&Path>) -> Result<Option<(OwnedFd, OwnedFd)>
             .with_context(|| format!("failed to create log directory: {}", parent.display()))?;
     }
 
-    Ok(Some(pipe().context("failed to create log pipe")?))
+    Ok(Some(cloexec_pipe().context("failed to create log pipe")?))
+}
+
+fn cloexec_pipe() -> nix::Result<(OwnedFd, OwnedFd)> {
+    pipe2(OFlag::O_CLOEXEC)
 }
 
 fn redirect_stdio_to_log(log_write_fd: &OwnedFd) -> Result<()> {
@@ -724,4 +1088,50 @@ fn read_fd_to_string(read_fd: OwnedFd) -> Result<String> {
     close(read_fd).ok();
 
     String::from_utf8(bytes).context("fd content was not valid UTF-8")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_config_builder_rejects_empty_process_args() {
+        let args = Vec::new();
+        let result = ProcessConfig::builder()
+            .id("demo")
+            .args(&args)
+            .rootfs(Path::new("/tmp/rootfs"))
+            .build();
+
+        assert!(matches!(result, Err(ContainerError::EmptyProcessArgs)));
+    }
+
+    #[test]
+    fn process_config_builder_reports_missing_required_field() {
+        let args = vec!["/bin/sh".to_string()];
+        let result = ProcessConfig::builder().id("demo").args(&args).build();
+
+        assert!(matches!(
+            result,
+            Err(ContainerError::MissingProcessConfigField { field: "rootfs" })
+        ));
+    }
+
+    #[test]
+    fn process_config_builder_defaults_optional_runtime_settings() {
+        let args = vec!["/bin/sh".to_string()];
+        let config = ProcessConfig::builder()
+            .id("demo")
+            .args(&args)
+            .rootfs(Path::new("/tmp/rootfs"))
+            .build()
+            .unwrap();
+
+        assert_eq!(config.id, "demo");
+        assert_eq!(config.env, &[] as &[String]);
+        assert!(config.mounts.is_empty());
+        assert_eq!(config.network_mode, NetworkMode::None);
+        assert_eq!(config.security_profile, SecurityProfile::Default);
+        assert_eq!(config.userns_mode, UserNamespaceMode::Host);
+    }
 }

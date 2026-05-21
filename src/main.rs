@@ -834,28 +834,28 @@ fn execute_container(
         Ok(())
     };
 
-    let process_config = ProcessConfig {
-        id: &id,
-        hostname: config.hostname.as_deref(),
-        args: &config.process.args,
-        env: &config.process.env,
-        cwd: config.process.cwd.as_deref(),
-        rootfs: &rootfs,
-        overlay_config,
-        readonly_rootfs: config.root.readonly,
-        mounts: &config.mounts,
-        process_user: config.process.user.as_ref(),
-        rlimits: &config.process.rlimits,
-        masked_paths,
-        readonly_paths,
-        log_path: capture_logs.then_some(log_path.as_path()),
-        flags,
-        cgroup_config,
-        network_mode,
-        security_profile,
-        userns_mode,
-        tty: options.tty,
-    };
+    let process_config = ProcessConfig::builder()
+        .id(&id)
+        .hostname(config.hostname.as_deref())
+        .args(&config.process.args)
+        .env(&config.process.env)
+        .cwd(config.process.cwd.as_deref())
+        .rootfs(&rootfs)
+        .overlay_config(overlay_config)
+        .readonly_rootfs(config.root.readonly)
+        .mounts(&config.mounts)
+        .process_user(config.process.user.as_ref())
+        .rlimits(&config.process.rlimits)
+        .masked_paths(masked_paths)
+        .readonly_paths(readonly_paths)
+        .log_path(capture_logs.then_some(log_path.as_path()))
+        .flags(flags)
+        .cgroup_config(cgroup_config)
+        .network_mode(network_mode)
+        .security_profile(security_profile)
+        .userns_mode(userns_mode)
+        .tty(options.tty)
+        .build()?;
 
     let process_exit = run_process(process_config, &mut save_started_state)?;
     let exit_code = process_exit.code;
