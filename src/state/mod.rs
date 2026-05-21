@@ -1,6 +1,7 @@
 use crate::network::release_bridge_network;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -61,10 +62,10 @@ pub struct HealthState {
 }
 
 #[derive(Debug, Clone)]
-pub struct StartedResources {
-    pub cgroup_path: Option<String>,
-    pub network_subnet: Option<String>,
-    pub log_path: Option<String>,
+pub struct StartedResources<'a> {
+    pub cgroup_path: Option<Cow<'a, str>>,
+    pub network_subnet: Option<Cow<'a, str>>,
+    pub log_path: Option<Cow<'a, str>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,7 +112,7 @@ impl ContainerState {
         id: &str,
         bundle: &Path,
         pid: i32,
-        resources: StartedResources,
+        resources: StartedResources<'_>,
         metadata: RuntimeMetadata<'_>,
     ) -> Result<Self> {
         validate_id(id)?;
@@ -123,10 +124,10 @@ impl ContainerState {
             pid: Some(pid),
             status: ContainerStatus::Running,
             bundle: bundle.display().to_string(),
-            cgroup_path: resources.cgroup_path,
+            cgroup_path: resources.cgroup_path.map(Cow::into_owned),
             network_mode: metadata.network_mode.to_string(),
-            network_subnet: resources.network_subnet,
-            log_path: resources.log_path,
+            network_subnet: resources.network_subnet.map(Cow::into_owned),
+            log_path: resources.log_path.map(Cow::into_owned),
             log_mode: metadata.log_mode.to_string(),
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
@@ -144,14 +145,14 @@ impl ContainerState {
     pub fn mark_running(
         &mut self,
         pid: i32,
-        resources: StartedResources,
+        resources: StartedResources<'_>,
         log_mode: &str,
     ) -> Result<()> {
         self.pid = Some(pid);
         self.status = ContainerStatus::Running;
-        self.cgroup_path = resources.cgroup_path;
-        self.network_subnet = resources.network_subnet;
-        self.log_path = resources.log_path;
+        self.cgroup_path = resources.cgroup_path.map(Cow::into_owned);
+        self.network_subnet = resources.network_subnet.map(Cow::into_owned);
+        self.log_path = resources.log_path.map(Cow::into_owned);
         self.log_mode = log_mode.to_string();
         self.updated_at_unix = unix_timestamp()?;
         self.exit_code = None;
@@ -467,9 +468,9 @@ mod tests {
             Path::new("/tmp/bundle"),
             1234,
             StartedResources {
-                cgroup_path: Some("/sys/fs/cgroup/container-runtime/crun-1234".to_string()),
+                cgroup_path: Some(Cow::Borrowed("/sys/fs/cgroup/container-runtime/crun-1234")),
                 network_subnet: None,
-                log_path: Some("/run/crun-rs/demo/container.log".to_string()),
+                log_path: Some(Cow::Borrowed("/run/crun-rs/demo/container.log")),
             },
             metadata,
         )
@@ -646,9 +647,9 @@ mod tests {
             Path::new("/tmp/bundle"),
             -1,
             StartedResources {
-                cgroup_path: Some("/sys/fs/cgroup/container-runtime/crun-stale".to_string()),
-                network_subnet: Some("10.88.20.0/24".to_string()),
-                log_path: Some("/run/crun-rs/stale/container.log".to_string()),
+                cgroup_path: Some(Cow::Borrowed("/sys/fs/cgroup/container-runtime/crun-stale")),
+                network_subnet: Some(Cow::Borrowed("10.88.20.0/24")),
+                log_path: Some(Cow::Borrowed("/run/crun-rs/stale/container.log")),
             },
             metadata,
         )

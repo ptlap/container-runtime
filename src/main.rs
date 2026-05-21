@@ -27,6 +27,7 @@ use container_runtime::trace::{self, ProcessNode, TraceOptions, TraceReport};
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
 use nix::sched::CloneFlags;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
@@ -802,12 +803,11 @@ fn execute_container(
             .cgroup_path
             .as_ref()
             .map(|path| path.display().to_string());
-        let network_subnet = started.network_subnet.clone();
-        let log_path = capture_logs.then(|| log_path.display().to_string());
+        let log_path_string = capture_logs.then(|| log_path.display().to_string());
         let resources = StartedResources {
-            cgroup_path,
-            network_subnet,
-            log_path,
+            cgroup_path: cgroup_path.as_deref().map(Cow::Borrowed),
+            network_subnet: started.network_subnet.as_deref().map(Cow::Borrowed),
+            log_path: log_path_string.as_deref().map(Cow::Borrowed),
         };
         let state = if let Some(mut state) = existing_state.take() {
             state.mark_running(started.pid, resources, log_mode.as_str())?;
