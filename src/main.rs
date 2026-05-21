@@ -9,7 +9,7 @@ use container_runtime::container_exec::{exec_in_container, ExecConfig};
 use container_runtime::doctor;
 use container_runtime::events::{collect_counter_events, snapshot_event, EventSnapshot};
 use container_runtime::filesystem::resolve_overlay_config;
-use container_runtime::health;
+use container_runtime::health::{self, HealthResult};
 use container_runtime::image;
 use container_runtime::inspect_security;
 use container_runtime::modes::{
@@ -26,7 +26,7 @@ use container_runtime::selfexec::{
 use container_runtime::signal::{parse_signal, send_signal, DEFAULT_SIGNAL};
 use container_runtime::spec::config::load_config;
 use container_runtime::state::{
-    self, ContainerState, ContainerStatus, HealthState, RuntimeMetadata, StartedResources,
+    self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources,
 };
 use container_runtime::trace::{self, ProcessNode, TraceOptions, TraceReport};
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
@@ -37,7 +37,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use std::{fs, io};
 
 const DEFAULT_STOP_TIMEOUT_SECS: u64 = 10;
@@ -1139,30 +1139,12 @@ fn show_event_history(id: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
-}
-
 fn container_status_name(status: &ContainerStatus) -> &'static str {
     match status {
         ContainerStatus::Created => "created",
         ContainerStatus::Running => "running",
         ContainerStatus::Stopped => "stopped",
     }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct HealthResult {
-    id: String,
-    checked_at_unix: u64,
-    status: String,
-    attempts: u32,
-    exit_code: Option<i32>,
-    signal: Option<String>,
-    command: Vec<String>,
 }
 
 fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: u64) -> Result<()> {
@@ -1178,84 +1160,14 @@ fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: u64) -> Resul
                 return Ok(());
             }
 
-            let result = run_healthcheck_once(id)?;
+            let result = health::run_once(id)?;
             print_health_result(&result, json)?;
             thread::sleep(interval);
         }
     }
 
-    let result = run_healthcheck_once(id)?;
+    let result = health::run_once(id)?;
     print_health_result(&result, json)
-}
-
-fn run_healthcheck_once(id: &str) -> Result<HealthResult> {
-    let mut state = state::load_current(id)?;
-    if state.status != ContainerStatus::Running {
-        bail!("container {id} is not running");
-    }
-
-    let Some(pid) = state.pid else {
-        bail!("container {id} has no pid");
-    };
-
-    let config = load_config(Path::new(&state.bundle).join("config.json"))?;
-    let healthcheck = config
-        .healthcheck
-        .as_ref()
-        .context("container has no healthcheck configured")?;
-    let args = health::command_args(healthcheck)?;
-    let max_attempts = health::attempts(healthcheck);
-
-    let mut attempts = 0;
-    let mut exit = None;
-    while attempts < max_attempts {
-        attempts += 1;
-        let current_exit = exec_in_container(ExecConfig {
-            target_pid: pid,
-            args: &args,
-            env: &config.process.env,
-            cwd: config.process.cwd.as_deref(),
-            cgroup_path: state.cgroup_path.as_deref(),
-            tty: false,
-        })?;
-
-        let healthy = current_exit.code == Some(0) && current_exit.signal.is_none();
-        exit = Some(current_exit);
-        if healthy {
-            break;
-        }
-    }
-    let exit = exit.context("healthcheck did not run")?;
-
-    let healthy = exit.code == Some(0) && exit.signal.is_none();
-    let checked_at_unix = unix_timestamp();
-    let health = HealthState {
-        status: if healthy { "healthy" } else { "unhealthy" }.to_string(),
-        exit_code: exit.code,
-        signal: exit.signal,
-        command: args,
-        checked_at_unix,
-    };
-    state.mark_health(health.clone())?;
-    state::save(&state)?;
-    let mut event =
-        RuntimeEvent::new(id, "health", health.status.as_str()).with_status(health.status.as_str());
-    if let Some(code) = health.exit_code.and_then(|code| u64::try_from(code).ok()) {
-        event = event.with_value(code);
-    }
-    audit_log::append(&event)?;
-
-    let result = HealthResult {
-        id: id.to_string(),
-        checked_at_unix,
-        status: health.status,
-        attempts,
-        exit_code: health.exit_code,
-        signal: health.signal,
-        command: health.command,
-    };
-
-    Ok(result)
 }
 
 fn print_health_result(result: &HealthResult, json: bool) -> Result<()> {

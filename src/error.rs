@@ -109,6 +109,21 @@ pub enum HealthcheckError {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum HealthRunError {
+    #[error("container {id} is not running")]
+    ContainerNotRunning { id: String },
+
+    #[error("container {id} has no pid")]
+    ContainerHasNoPid { id: String },
+
+    #[error("container has no healthcheck configured")]
+    NoHealthcheckConfigured,
+
+    #[error("healthcheck did not run")]
+    HealthcheckDidNotRun,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum StateError {
     #[error("container id must not be empty")]
     EmptyContainerId,
