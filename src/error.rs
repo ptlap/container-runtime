@@ -143,3 +143,51 @@ pub enum SignalError {
     #[error("unsupported signal: {value}")]
     UnsupportedSignal { value: String },
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ImageError {
+    #[error("image name must not be empty")]
+    EmptyImageName,
+
+    #[error("image name may only contain ASCII letters, numbers, '.', '_' and '-'")]
+    InvalidImageName,
+
+    #[error("image not found: {name}")]
+    ImageNotFound { name: String },
+
+    #[error("image rootfs not found: {path}")]
+    ImageRootfsNotFound { path: String },
+
+    #[error("rootfs tar does not exist: {path}")]
+    RootfsTarDoesNotExist { path: String },
+
+    #[error("image already exists: {name}")]
+    ImageAlreadyExists { name: String },
+
+    #[error("tar extraction failed: {stderr}")]
+    TarExtractionFailed { stderr: String },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CheckpointError {
+    #[error("container {id} is not running")]
+    ContainerNotRunning { id: String },
+
+    #[error("running container state has no pid")]
+    ContainerHasNoPid,
+
+    #[error("criu is not available: {reason}")]
+    CriuNotAvailable { reason: String },
+
+    #[error("checkpoint image directory already exists: {path}")]
+    ImageDirectoryAlreadyExists { path: String },
+
+    #[error("checkpoint image directory does not exist: {path}")]
+    ImageDirectoryDoesNotExist { path: String },
+
+    #[error("empty CRIU command")]
+    EmptyCriuCommand,
+
+    #[error("CRIU command {command} failed: {stderr}")]
+    CriuCommandFailed { command: String, stderr: String },
+}

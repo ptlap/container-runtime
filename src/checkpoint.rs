@@ -1,6 +1,7 @@
+use crate::error::CheckpointError;
 use crate::spec::config::load_config;
 use crate::state::{self, ContainerStatus, DEFAULT_STATE_ROOT};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,11 +49,11 @@ pub struct RestoreReport {
 pub fn checkpoint(id: &str, options: CheckpointOptions) -> Result<CheckpointReport> {
     let container_state = state::load_current(id)?;
     if container_state.status != ContainerStatus::Running {
-        bail!("container {id} is not running");
+        return Err(CheckpointError::ContainerNotRunning { id: id.to_string() }.into());
     }
     let pid = container_state
         .pid
-        .context("running container state has no pid")?;
+        .ok_or(CheckpointError::ContainerHasNoPid)?;
     let criu = detect_criu();
     ensure_criu_available(&criu)?;
 
@@ -60,10 +61,10 @@ pub fn checkpoint(id: &str, options: CheckpointOptions) -> Result<CheckpointRepo
         .images_dir
         .unwrap_or_else(|| default_checkpoint_dir(id));
     if images_dir.exists() {
-        bail!(
-            "checkpoint image directory already exists: {}",
-            images_dir.display()
-        );
+        return Err(CheckpointError::ImageDirectoryAlreadyExists {
+            path: images_dir.display().to_string(),
+        }
+        .into());
     }
     fs::create_dir_all(&images_dir).with_context(|| {
         format!(
@@ -100,10 +101,10 @@ pub fn restore(id: &str, options: RestoreOptions) -> Result<RestoreReport> {
         .images_dir
         .unwrap_or_else(|| default_checkpoint_dir(id));
     if !images_dir.is_dir() {
-        bail!(
-            "checkpoint image directory does not exist: {}",
-            images_dir.display()
-        );
+        return Err(CheckpointError::ImageDirectoryDoesNotExist {
+            path: images_dir.display().to_string(),
+        }
+        .into());
     }
 
     let rootfs = container_state
@@ -156,20 +157,23 @@ pub fn detect_criu() -> CriuStatus {
     }
 }
 
-fn ensure_criu_available(status: &CriuStatus) -> Result<()> {
+fn ensure_criu_available(status: &CriuStatus) -> std::result::Result<(), CheckpointError> {
     if status.available {
         return Ok(());
     }
 
-    bail!(
-        "criu is not available: {}",
-        status.error.as_deref().unwrap_or("unknown error")
-    );
+    Err(CheckpointError::CriuNotAvailable {
+        reason: status
+            .error
+            .as_deref()
+            .unwrap_or("unknown error")
+            .to_string(),
+    })
 }
 
 fn run_criu(command: &[String]) -> Result<()> {
     let Some((program, args)) = command.split_first() else {
-        bail!("empty CRIU command");
+        return Err(CheckpointError::EmptyCriuCommand.into());
     };
     let output = Command::new(program)
         .args(args)
@@ -180,7 +184,11 @@ fn run_criu(command: &[String]) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("{} failed: {}", command.join(" "), stderr.trim());
+        return Err(CheckpointError::CriuCommandFailed {
+            command: command.join(" "),
+            stderr: stderr.trim().to_string(),
+        }
+        .into());
     }
 
     Ok(())
@@ -310,5 +318,21 @@ mod tests {
         ));
 
         assert!(validate_checkpoint_id("demo_01.2-3").is_ok());
+    }
+
+    #[test]
+    fn ensure_criu_available_returns_err_when_unavailable() {
+        let status = CriuStatus {
+            available: false,
+            version: None,
+            error: Some("not found".to_string()),
+        };
+        let err = ensure_criu_available(&status).unwrap_err();
+        assert_eq!(
+            err,
+            CheckpointError::CriuNotAvailable {
+                reason: "not found".to_string()
+            }
+        );
     }
 }

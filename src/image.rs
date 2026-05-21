@@ -1,4 +1,5 @@
-use anyhow::{bail, Context, Result};
+use crate::error::ImageError;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::json;
 use std::fs;
@@ -26,10 +27,16 @@ pub fn bundle_path(name: &str) -> Result<PathBuf> {
     validate_image_name(name)?;
     let dir = image_dir(Path::new(DEFAULT_IMAGE_ROOT), name);
     if !dir.join("config.json").is_file() {
-        bail!("image not found: {name}");
+        return Err(ImageError::ImageNotFound {
+            name: name.to_string(),
+        }
+        .into());
     }
     if !dir.join("rootfs").is_dir() {
-        bail!("image rootfs not found: {}", dir.join("rootfs").display());
+        return Err(ImageError::ImageRootfsNotFound {
+            path: dir.join("rootfs").display().to_string(),
+        }
+        .into());
     }
     Ok(dir)
 }
@@ -37,7 +44,10 @@ pub fn bundle_path(name: &str) -> Result<PathBuf> {
 fn import_into(root: &Path, rootfs_tar: &Path, name: &str) -> Result<ImageInfo> {
     validate_image_name(name)?;
     if !rootfs_tar.is_file() {
-        bail!("rootfs tar does not exist: {}", rootfs_tar.display());
+        return Err(ImageError::RootfsTarDoesNotExist {
+            path: rootfs_tar.display().to_string(),
+        }
+        .into());
     }
 
     fs::create_dir_all(root)
@@ -45,7 +55,10 @@ fn import_into(root: &Path, rootfs_tar: &Path, name: &str) -> Result<ImageInfo> 
 
     let dir = image_dir(root, name);
     if dir.exists() {
-        bail!("image already exists: {name}");
+        return Err(ImageError::ImageAlreadyExists {
+            name: name.to_string(),
+        }
+        .into());
     }
 
     let rootfs = dir.join("rootfs");
@@ -103,7 +116,10 @@ fn extract_rootfs(rootfs_tar: &Path, rootfs: &Path) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("tar extraction failed: {}", stderr.trim());
+        return Err(ImageError::TarExtractionFailed {
+            stderr: stderr.trim().to_string(),
+        }
+        .into());
     }
 
     Ok(())
@@ -156,16 +172,16 @@ fn image_dir(root: &Path, name: &str) -> PathBuf {
     root.join(name)
 }
 
-fn validate_image_name(name: &str) -> Result<()> {
+fn validate_image_name(name: &str) -> std::result::Result<(), ImageError> {
     if name.is_empty() {
-        bail!("image name must not be empty");
+        return Err(ImageError::EmptyImageName);
     }
 
     if !name
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
-        bail!("image name may only contain ASCII letters, numbers, '.', '_' and '-'");
+        return Err(ImageError::InvalidImageName);
     }
 
     Ok(())
@@ -177,10 +193,22 @@ mod tests {
 
     #[test]
     fn rejects_invalid_image_names() {
-        assert!(validate_image_name("").is_err());
-        assert!(validate_image_name("../alpine").is_err());
-        assert!(validate_image_name("alpine/latest").is_err());
-        assert!(validate_image_name("alpine latest").is_err());
+        assert_eq!(
+            validate_image_name("").unwrap_err(),
+            ImageError::EmptyImageName
+        );
+        assert_eq!(
+            validate_image_name("../alpine").unwrap_err(),
+            ImageError::InvalidImageName
+        );
+        assert_eq!(
+            validate_image_name("alpine/latest").unwrap_err(),
+            ImageError::InvalidImageName
+        );
+        assert_eq!(
+            validate_image_name("alpine latest").unwrap_err(),
+            ImageError::InvalidImageName
+        );
         assert!(validate_image_name("alpine_3.19-1").is_ok());
     }
 
