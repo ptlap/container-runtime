@@ -64,3 +64,19 @@ Do not describe this project as production-ready. Changes touching namespaces,
 mounts, cgroups, iptables, or `/proc/sys` can affect the host; document cleanup
 paths and failure behavior. Keep Docker/image-management features outside the
 runtime core unless explicitly scoped as scripts or examples.
+
+## Codex Code Fit Rules
+
+When implementing roadmap goals:
+
+- Match the existing Rust style: small structs/enums, explicit conversion impls, and `anyhow::Result`.
+- Keep CLI parsing in `src/main.rs`; move reusable behavior into existing modules.
+- Do not duplicate runtime logic in tests or scripts.
+- Use existing state helpers from `src/state/mod.rs`.
+- Use existing network helpers from `src/network/mod.rs`.
+- Use existing runtime/container helpers from `src/container/mod.rs`.
+- For host resources, always define cleanup behavior: cgroups, veth, NAT, mounts, state files.
+- Root-required tests must live under `tests/integration/` and be `#[ignore]` or self-skip when not root.
+- Tests should call the `crun` binary like a user would.
+- Avoid broad refactors while implementing a single roadmap goal.
+- Avoid `unwrap()` and `expect()` in runtime code; they are acceptable only in tests.

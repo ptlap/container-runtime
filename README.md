@@ -40,7 +40,7 @@ sudo scripts/benchmark.sh --iterations 30 --net none --security default
 ```
 
 The benchmark script creates a temporary bundle that runs `/bin/sh -c "exit 0"`,
-records startup latency to CSV, and prints min/avg/max latency. Use `--net
+records startup latency to CSV and prints min/avg/max latency. Use `--net
 bridge` to include veth and NAT setup overhead.
 
 ## Run
