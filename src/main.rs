@@ -1,7 +1,5 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use container_runtime::cgroup::read_container_stats;
-use container_runtime::checkpoint::{self, CheckpointOptions, RestoreOptions};
 use container_runtime::cli_runtime::{process_exit_status, should_capture_logs};
 use container_runtime::error::LifecycleError;
 use container_runtime::image;
@@ -17,12 +15,10 @@ use container_runtime::selfexec::{
 };
 use container_runtime::signal::DEFAULT_SIGNAL;
 use container_runtime::spec::config::load_config;
-use container_runtime::state::{self, ContainerState};
-use container_runtime::trace::{self, TraceOptions};
+use container_runtime::state::ContainerState;
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
 use std::io;
 use std::io::IsTerminal;
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -363,8 +359,8 @@ fn main() -> Result<()> {
             tty,
         })?,
         Command::Start { id } => start_container(&id)?,
-        Command::State { id, json } => show_state(&id, json)?,
-        Command::Stats { id, json } => show_stats(&id, json)?,
+        Command::State { id, json } => container_runtime::cli_runtime::show_state(&id, json)?,
+        Command::Stats { id, json } => container_runtime::cli_runtime::show_stats(&id, json)?,
         Command::Events {
             id,
             json,
@@ -372,39 +368,50 @@ fn main() -> Result<()> {
             snapshot,
             once,
             interval_ms,
-        } => stream_events(&id, json, history, snapshot, once, interval_ms)?,
+        } => container_runtime::cli_runtime::stream_events(
+            &id,
+            json,
+            history,
+            snapshot,
+            once,
+            interval_ms,
+        )?,
         Command::Health {
             id,
             json,
             watch,
             interval_ms,
-        } => run_healthcheck(&id, json, watch, interval_ms)?,
-        Command::Ps { json } => list_containers(json)?,
+        } => container_runtime::cli_runtime::run_healthcheck(&id, json, watch, interval_ms)?,
+        Command::Ps { json } => container_runtime::cli_runtime::list_containers(json)?,
         Command::Exec { tty, id, args } => exec_container(&id, &args, tty)?,
-        Command::Logs { id, follow } => show_logs(&id, follow)?,
+        Command::Logs { id, follow } => container_runtime::cli_runtime::show_logs(&id, follow)?,
         Command::Kill { id, signal } => kill_container(&id, &signal)?,
         Command::Stop { id, timeout } => stop_container(&id, timeout)?,
         Command::Delete { id } => delete_container(&id)?,
-        Command::Doctor { fix, json } => run_doctor(fix, json)?,
-        Command::InspectSecurity { id, json } => inspect_security_command(&id, json)?,
-        Command::Diff { id, json } => diff_rootfs(&id, json)?,
-        Command::Validate { bundle, json } => validate_bundle(&bundle, json)?,
+        Command::Doctor { fix, json } => container_runtime::cli_runtime::run_doctor(fix, json)?,
+        Command::InspectSecurity { id, json } => {
+            container_runtime::cli_runtime::inspect_security_command(&id, json)?
+        }
+        Command::Diff { id, json } => container_runtime::cli_runtime::diff_rootfs(&id, json)?,
+        Command::Validate { bundle, json } => {
+            container_runtime::cli_runtime::validate_bundle(&bundle, json)?
+        }
         Command::Trace {
             id,
             json,
             strace,
             duration_ms,
-        } => trace_container(&id, json, strace, duration_ms)?,
+        } => container_runtime::cli_runtime::trace_container(&id, json, strace, duration_ms)?,
         Command::Checkpoint {
             id,
             json,
             images_dir,
-        } => checkpoint_container(&id, json, images_dir)?,
+        } => container_runtime::cli_runtime::checkpoint_container(&id, json, images_dir)?,
         Command::Restore {
             id,
             json,
             images_dir,
-        } => restore_container(&id, json, images_dir)?,
+        } => container_runtime::cli_runtime::restore_container(&id, json, images_dir)?,
         Command::Image { command } => image_command(command)?,
         Command::RunImage {
             net,
@@ -431,33 +438,11 @@ fn main() -> Result<()> {
 
 fn image_command(command: ImageCommand) -> Result<()> {
     match command {
-        ImageCommand::Import { rootfs_tar, name } => import_image(&rootfs_tar, &name),
-        ImageCommand::List { json } => list_images(json),
+        ImageCommand::Import { rootfs_tar, name } => {
+            container_runtime::cli_runtime::import_image(&rootfs_tar, &name)
+        }
+        ImageCommand::List { json } => container_runtime::cli_runtime::list_images(json),
     }
-}
-
-fn import_image(rootfs_tar: &Path, name: &str) -> Result<()> {
-    let image = image::import(rootfs_tar, name)?;
-    println!("imported image: {}", image.name);
-    println!("path: {}", image.path);
-    println!("rootfs: {}", image.rootfs);
-    Ok(())
-}
-
-fn list_images(json: bool) -> Result<()> {
-    let images = image::list()?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&images)?);
-        return Ok(());
-    }
-
-    println!("{:<24} {:<48} ROOTFS", "NAME", "PATH");
-    for image in images {
-        println!("{:<24} {:<48} {}", image.name, image.path, image.rootfs);
-    }
-
-    Ok(())
 }
 
 fn run_image(options: RunImageOptions) -> Result<()> {
@@ -482,62 +467,6 @@ fn debug_command(command: DebugCommand) -> Result<()> {
 fn debug_self_exec() -> Result<()> {
     println!("exe: {}", current_exe_link()?.display());
     println!("running_from_memfd: {}", is_running_from_memfd()?);
-    Ok(())
-}
-
-fn trace_container(id: &str, json: bool, strace: bool, duration_ms: u64) -> Result<()> {
-    if duration_ms == 0 {
-        bail!("trace duration must be greater than zero");
-    }
-
-    let report = trace::trace(
-        id,
-        TraceOptions {
-            strace,
-            strace_duration: Duration::from_millis(duration_ms),
-        },
-    )?;
-    container_runtime::cli_runtime::print_trace_report(&report, json)
-}
-
-fn checkpoint_container(id: &str, json: bool, images_dir: Option<PathBuf>) -> Result<()> {
-    let report = checkpoint::checkpoint(id, CheckpointOptions { images_dir })?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
-    }
-
-    println!("experimental: {}", report.experimental);
-    println!("id: {}", report.id);
-    println!("pid: {}", report.pid);
-    println!("images_dir: {}", report.images_dir);
-    println!("criu_available: {}", report.criu.available);
-    if let Some(version) = report.criu.version.as_deref() {
-        println!("criu_version: {version}");
-    }
-    println!("command: {}", report.command.join(" "));
-
-    Ok(())
-}
-
-fn restore_container(id: &str, json: bool, images_dir: Option<PathBuf>) -> Result<()> {
-    let report = checkpoint::restore(id, RestoreOptions { images_dir })?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
-    }
-
-    println!("experimental: {}", report.experimental);
-    println!("id: {}", report.id);
-    println!("images_dir: {}", report.images_dir);
-    println!("criu_available: {}", report.criu.available);
-    if let Some(version) = report.criu.version.as_deref() {
-        println!("criu_version: {version}");
-    }
-    println!("command: {}", report.command.join(" "));
-
     Ok(())
 }
 
@@ -662,137 +591,6 @@ fn env_uid(key: &str) -> Result<Option<u32>> {
     Ok(Some(parsed))
 }
 
-fn show_state(id: &str, json: bool) -> Result<()> {
-    let state = state::load_current(id)?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&state)?);
-    } else {
-        println!("id: {}", state.id);
-        println!("status: {:?}", state.status);
-        println!(
-            "pid: {}",
-            state.pid.map_or("-".to_string(), |pid| pid.to_string())
-        );
-        println!("bundle: {}", state.bundle);
-        println!(
-            "cgroup_path: {}",
-            state.cgroup_path.as_deref().unwrap_or("-")
-        );
-        println!("network_mode: {}", state.network_mode);
-        if let Some(subnet) = state.network_subnet {
-            println!("network_subnet: {subnet}");
-        }
-        if let Some(log_path) = state.log_path {
-            println!("log_path: {log_path}");
-        }
-        println!("log_mode: {}", state.log_mode);
-        println!("security_profile: {}", state.security_profile);
-        println!("userns_mode: {}", state.userns_mode);
-        println!("rootfs_mode: {}", state.rootfs_mode);
-        println!("policy_profile: {}", state.policy_profile);
-        if let Some(health) = state.health.as_ref() {
-            println!("health_status: {}", health.status);
-            println!("health_checked_at_unix: {}", health.checked_at_unix);
-        }
-        println!("created_at_unix: {}", state.created_at_unix);
-        println!("updated_at_unix: {}", state.updated_at_unix);
-        if let Some(code) = state.exit_code {
-            println!("exit_code: {code}");
-        }
-        if let Some(signal) = state.signal {
-            println!("signal: {signal}");
-        }
-    }
-
-    Ok(())
-}
-
-fn show_stats(id: &str, json: bool) -> Result<()> {
-    let stats = read_container_stats(id)?;
-    if json {
-        println!("{}", serde_json::to_string_pretty(&stats)?);
-    } else {
-        println!("id: {id}");
-        println!("cgroup_path: {}", stats.path);
-        if let Some(value) = stats.memory_current {
-            println!("memory_current: {value}");
-        }
-        if let Some(value) = stats.memory_max {
-            println!("memory_max: {value}");
-        }
-        if let Some(value) = stats.cpu_usage_usec {
-            println!("cpu_usage_usec: {value}");
-        }
-        if let Some(value) = stats.cpu_user_usec {
-            println!("cpu_user_usec: {value}");
-        }
-        if let Some(value) = stats.cpu_system_usec {
-            println!("cpu_system_usec: {value}");
-        }
-        if let Some(value) = stats.pids_current {
-            println!("pids_current: {value}");
-        }
-        if let Some(value) = stats.pids_max {
-            println!("pids_max: {value}");
-        }
-        if let Some(value) = stats.cpu.nr_periods {
-            println!("cpu_nr_periods: {value}");
-        }
-        if let Some(value) = stats.cpu.nr_throttled {
-            println!("cpu_nr_throttled: {value}");
-        }
-        if let Some(value) = stats.cpu.throttled_usec {
-            println!("cpu_throttled_usec: {value}");
-        }
-        for (event, value) in &stats.memory.events {
-            println!("memory_event_{event}: {value}");
-        }
-        for (event, value) in &stats.pids.events {
-            println!("pids_event_{event}: {value}");
-        }
-        if let Some(value) = stats.memory.pressure.as_deref() {
-            println!("memory_pressure: {value}");
-        }
-        if let Some(value) = stats.cpu.pressure.as_deref() {
-            println!("cpu_pressure: {value}");
-        }
-        for device in &stats.io {
-            println!(
-                "io_device {}: rbytes={} wbytes={} rios={} wios={} dbytes={} dios={}",
-                device.device,
-                device.rbytes.unwrap_or(0),
-                device.wbytes.unwrap_or(0),
-                device.rios.unwrap_or(0),
-                device.wios.unwrap_or(0),
-                device.dbytes.unwrap_or(0),
-                device.dios.unwrap_or(0)
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn stream_events(
-    id: &str,
-    json: bool,
-    history: bool,
-    snapshot: bool,
-    once: bool,
-    interval_ms: u64,
-) -> Result<()> {
-    container_runtime::cli_runtime::stream_events(id, json, history, snapshot, once, interval_ms)
-}
-
-fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: u64) -> Result<()> {
-    container_runtime::cli_runtime::run_healthcheck(id, json, watch, interval_ms)
-}
-
-fn list_containers(json: bool) -> Result<()> {
-    container_runtime::cli_runtime::list_containers(json)
-}
-
 fn exec_container(id: &str, args: &[String], tty: bool) -> Result<()> {
     let report = lifecycle::exec(id, args, tty)?;
 
@@ -807,10 +605,6 @@ fn exec_container(id: &str, args: &[String], tty: bool) -> Result<()> {
 
 fn exit_with_process_status(code: Option<i32>, signal: Option<&str>) -> ! {
     std::process::exit(process_exit_status(code, signal));
-}
-
-fn show_logs(id: &str, follow: bool) -> Result<()> {
-    container_runtime::cli_runtime::show_logs(id, follow)
 }
 
 fn kill_container(id: &str, signal: &str) -> Result<()> {
@@ -851,20 +645,4 @@ fn delete_container(id: &str) -> Result<()> {
     lifecycle::delete(id)?;
     println!("deleted container state: {id}");
     Ok(())
-}
-
-fn run_doctor(fix: bool, json: bool) -> Result<()> {
-    container_runtime::cli_runtime::run_doctor(fix, json)
-}
-
-fn inspect_security_command(id: &str, json: bool) -> Result<()> {
-    container_runtime::cli_runtime::inspect_security_command(id, json)
-}
-
-fn diff_rootfs(id: &str, json: bool) -> Result<()> {
-    container_runtime::cli_runtime::diff_rootfs(id, json)
-}
-
-fn validate_bundle(bundle: &Path, json: bool) -> Result<()> {
-    container_runtime::cli_runtime::validate_bundle(bundle, json)
 }
