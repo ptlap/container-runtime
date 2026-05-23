@@ -4,11 +4,9 @@ use container_runtime::audit_log::{self, AuditEvent as RuntimeEvent};
 use container_runtime::cgroup::read_container_stats;
 use container_runtime::checkpoint::{self, CheckpointOptions, RestoreOptions};
 use container_runtime::cli_runtime::{process_exit_status, should_capture_logs};
-use container_runtime::container::{run_process, ProcessConfig};
 use container_runtime::doctor;
 use container_runtime::error::LifecycleError;
 use container_runtime::events::stream_counter_events;
-use container_runtime::filesystem::resolve_rootfs;
 use container_runtime::health::{self, HealthResult};
 use container_runtime::image;
 use container_runtime::inspect_security;
@@ -16,7 +14,6 @@ use container_runtime::lifecycle::{self, CreateOptions};
 use container_runtime::modes::{
     parse_log_mode, parse_network_mode, parse_security_profile, LogMode,
 };
-use container_runtime::namespace::effective_namespace_flags;
 use container_runtime::network::NetworkMode;
 use container_runtime::policy;
 use container_runtime::rootfs_diff;
@@ -26,10 +23,9 @@ use container_runtime::selfexec::{
 };
 use container_runtime::signal::DEFAULT_SIGNAL;
 use container_runtime::spec::config::load_config;
-use container_runtime::state::{self, ContainerState, RuntimeMetadata, StartedResources};
+use container_runtime::state::{self, ContainerState};
 use container_runtime::trace::{self, ProcessNode, TraceOptions, TraceReport};
 use container_runtime::userns::{UserNamespaceMap, UserNamespaceMode};
-use std::borrow::Cow;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
@@ -633,21 +629,15 @@ fn start_container(id: &str) -> Result<()> {
     execute_container(options, Some(state))
 }
 
-fn execute_container(
-    options: RunOptions,
-    mut existing_state: Option<ContainerState>,
-) -> Result<()> {
-    let id = options.id;
-    let bundle = options.bundle;
+fn execute_container(options: RunOptions, existing_state: Option<ContainerState>) -> Result<()> {
     let network_mode = options.network_mode.to_effective();
     if network_mode != options.network_mode {
         eprintln!(
             "warn: bridge networking is not supported in rootless mode, falling back to none"
         );
     }
-    let userns_mode = options.userns_mode;
 
-    let config_path = bundle.join("config.json");
+    let config_path = options.bundle.join("config.json");
     let config = load_config(config_path)?;
     let effective_policy = policy::resolve_effective_policy(
         config.crun.as_ref(),
@@ -658,135 +648,27 @@ fn execute_container(
         options.security_profile,
         options.log_mode,
     )?;
-    let security_profile = effective_policy.security_profile;
     let log_mode = effective_policy.log_mode;
-    let policy_profile = effective_policy.profile;
-
-    let rootfs = resolve_rootfs(&bundle, &config.root.path, config.crun.as_ref());
-
-    println!("args: {:?}", config.process.args);
-    println!("env: {:?}", config.process.env);
-    println!("rootfs: {}", rootfs.path.display());
-
-    let namespaces = config
-        .linux
-        .as_ref()
-        .map(|linux| {
-            linux
-                .namespaces
-                .iter()
-                .map(|ns| ns.namespace_type.as_str())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let flags = effective_namespace_flags(&namespaces, network_mode, userns_mode);
-
-    println!("namespaces: {:?}", namespaces);
-    println!("clone flags: {:?}", flags);
-    println!("network mode: {}", network_mode.as_str());
-    println!("security profile: {}", security_profile.as_str());
-    println!("log mode: {}", log_mode.as_str());
-    println!("user namespace: {}", userns_mode.as_str());
-    println!("rootfs mode: {}", rootfs.mode.as_str());
-    println!("policy profile: {}", policy_profile.as_str());
-
-    let masked_paths = config
-        .linux
-        .as_ref()
-        .map(|linux| linux.masked_paths.as_slice())
-        .unwrap_or(&[]);
-    let readonly_paths = config
-        .linux
-        .as_ref()
-        .map(|linux| linux.readonly_paths.as_slice())
-        .unwrap_or(&[]);
-
-    let log_path = state::log_path(&id)?;
     let capture_logs = !options.tty && should_capture_logs(log_mode, io::stdin().is_terminal());
-    let mut running_state = None;
-    let mut save_started_state = |started: container_runtime::container::StartedProcess| {
-        let cgroup_path = started
-            .cgroup_path
-            .as_ref()
-            .map(|path| path.display().to_string());
-        let log_path_string = capture_logs.then(|| log_path.display().to_string());
-        let resources = StartedResources {
-            cgroup_path: cgroup_path.as_deref().map(Cow::Borrowed),
-            network_subnet: started.network_subnet.as_deref().map(Cow::Borrowed),
-            log_path: log_path_string.as_deref().map(Cow::Borrowed),
-        };
-        let state = if let Some(mut state) = existing_state.take() {
-            state.mark_running(started.pid, resources, log_mode.as_str())?;
-            state
-        } else {
-            ContainerState::running(
-                &id,
-                &bundle,
-                started.pid,
-                resources,
-                RuntimeMetadata {
-                    network_mode: network_mode.as_str(),
-                    security_profile: security_profile.as_str(),
-                    log_mode: log_mode.as_str(),
-                    userns_mode: userns_mode.as_str(),
-                    rootfs_mode: rootfs.mode.as_str(),
-                    policy_profile: policy_profile.as_str(),
-                    tty: options.tty,
-                },
-            )?
-        };
-        state::save(&state)?;
-        audit_log::append_simple(&id, "lifecycle", "started", Some("running"))?;
-        running_state = Some(state);
-        Ok(())
+
+    let run_options = lifecycle::ContainerRunOptions {
+        id: &options.id,
+        bundle: &options.bundle,
+        network_mode: options.network_mode,
+        security_profile: options.security_profile,
+        log_mode: options.log_mode,
+        userns_mode: options.userns_mode,
+        tty: options.tty,
+        capture_logs,
     };
 
-    let process_config = ProcessConfig::builder()
-        .id(&id)
-        .hostname(config.hostname.as_deref())
-        .args(&config.process.args)
-        .env(&config.process.env)
-        .cwd(config.process.cwd.as_deref())
-        .rootfs(&rootfs.path)
-        .overlay_config(rootfs.overlay_config)
-        .readonly_rootfs(config.root.readonly)
-        .mounts(&config.mounts)
-        .process_user(config.process.user.as_ref())
-        .rlimits(&config.process.rlimits)
-        .masked_paths(masked_paths)
-        .readonly_paths(readonly_paths)
-        .log_path(capture_logs.then_some(log_path.as_path()))
-        .flags(flags)
-        .cgroup_config(effective_policy.cgroup_config)
-        .network_mode(network_mode)
-        .security_profile(security_profile)
-        .userns_mode(userns_mode)
-        .tty(options.tty)
-        .build()?;
+    let report = lifecycle::run_container_process(run_options, existing_state)?;
 
-    let process_exit = run_process(process_config, &mut save_started_state)?;
-    let exit_code = process_exit.code;
-    let exit_signal = process_exit.signal.clone();
-    let child_error = process_exit.error.clone();
-
-    if let Some(mut state) = running_state {
-        state
-            .mark_stopped(exit_code, exit_signal.clone())
-            .context("failed to update stopped state")?;
-        state::save(&state)?;
-        let mut event = RuntimeEvent::new(&id, "lifecycle", "stopped").with_status("stopped");
-        if let Some(code) = exit_code.and_then(|code| u64::try_from(code).ok()) {
-            event = event.with_value(code);
-        }
-        audit_log::append(&event)?;
-    }
-
-    if let Some(error) = child_error {
+    if let Some(error) = report.child_error {
         return Err(LifecycleError::ChildFailed { error }.into());
     }
 
-    exit_with_process_status(exit_code, exit_signal.as_deref());
+    exit_with_process_status(report.exit_code, report.exit_signal.as_deref());
 }
 
 fn parse_userns_mode(value: &str) -> Result<UserNamespaceMode> {

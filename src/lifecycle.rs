@@ -1,22 +1,45 @@
 use anyhow::Context;
 use anyhow::Result;
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::audit_log::{self, AuditEvent};
+use crate::container::{run_process, ProcessConfig, StartedProcess};
 use crate::container_exec::{exec_in_container, ExecConfig};
 use crate::error::LifecycleError;
 use crate::filesystem::resolve_rootfs;
 use crate::modes::LogMode;
+use crate::namespace::effective_namespace_flags;
 use crate::network::NetworkMode;
 use crate::policy;
 use crate::security::SecurityProfile;
 use crate::signal::{parse_signal, send_signal};
 use crate::spec::config::load_config;
-use crate::state::{self, ContainerState, ContainerStatus, RuntimeMetadata};
+use crate::state::{self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources};
 use crate::userns::UserNamespaceMode;
+
+#[derive(Debug, Clone)]
+pub struct ContainerRunOptions<'a> {
+    pub id: &'a str,
+    pub bundle: &'a Path,
+    pub network_mode: NetworkMode,
+    pub security_profile: SecurityProfile,
+    pub log_mode: LogMode,
+    pub userns_mode: UserNamespaceMode,
+    pub tty: bool,
+    pub capture_logs: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContainerRunReport {
+    pub exit_code: Option<i32>,
+    pub exit_signal: Option<String>,
+    pub child_error: Option<String>,
+    pub warnings: Vec<String>,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct CreateOptions<'a> {
@@ -211,6 +234,157 @@ fn ensure_container_absent(id: &str) -> Result<()> {
 fn record_created_event(id: &str) -> Result<()> {
     audit_log::reset(id)?;
     audit_log::append_simple(id, "lifecycle", "created", Some("created"))
+}
+
+pub fn run_container_process(
+    options: ContainerRunOptions<'_>,
+    mut existing_state: Option<ContainerState>,
+) -> Result<ContainerRunReport> {
+    let id = options.id;
+    let bundle = options.bundle;
+    let network_mode = options.network_mode.to_effective();
+    let userns_mode = options.userns_mode;
+
+    let config_path = bundle.join("config.json");
+    let config = load_config(&config_path)?;
+    let effective_policy = policy::resolve_effective_policy(
+        config.crun.as_ref(),
+        config
+            .linux
+            .as_ref()
+            .and_then(|linux| linux.resources.as_ref()),
+        options.security_profile,
+        options.log_mode,
+    )?;
+    let security_profile = effective_policy.security_profile;
+    let log_mode = effective_policy.log_mode;
+    let policy_profile = effective_policy.profile;
+
+    let rootfs = resolve_rootfs(bundle, &config.root.path, config.crun.as_ref());
+
+    println!("args: {:?}", config.process.args);
+    println!("env: {:?}", config.process.env);
+    println!("rootfs: {}", rootfs.path.display());
+
+    let namespaces = config
+        .linux
+        .as_ref()
+        .map(|linux| {
+            linux
+                .namespaces
+                .iter()
+                .map(|ns| ns.namespace_type.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let flags = effective_namespace_flags(&namespaces, network_mode, userns_mode);
+
+    println!("namespaces: {:?}", namespaces);
+    println!("clone flags: {:?}", flags);
+    println!("network mode: {}", network_mode.as_str());
+    println!("security profile: {}", security_profile.as_str());
+    println!("log mode: {}", log_mode.as_str());
+    println!("user namespace: {}", userns_mode.as_str());
+    println!("rootfs mode: {}", rootfs.mode.as_str());
+    println!("policy profile: {}", policy_profile.as_str());
+
+    let masked_paths = config
+        .linux
+        .as_ref()
+        .map(|linux| linux.masked_paths.as_slice())
+        .unwrap_or(&[]);
+    let readonly_paths = config
+        .linux
+        .as_ref()
+        .map(|linux| linux.readonly_paths.as_slice())
+        .unwrap_or(&[]);
+
+    let log_path = state::log_path(id)?;
+    let mut running_state = None;
+    let mut save_started_state = |started: StartedProcess| {
+        let cgroup_path = started
+            .cgroup_path
+            .as_ref()
+            .map(|path| path.display().to_string());
+        let log_path_string = options.capture_logs.then(|| log_path.display().to_string());
+        let resources = StartedResources {
+            cgroup_path: cgroup_path.as_deref().map(Cow::Borrowed),
+            network_subnet: started.network_subnet.as_deref().map(Cow::Borrowed),
+            log_path: log_path_string.as_deref().map(Cow::Borrowed),
+        };
+        let state = if let Some(mut state) = existing_state.take() {
+            state.mark_running(started.pid, resources, log_mode.as_str())?;
+            state
+        } else {
+            ContainerState::running(
+                id,
+                bundle,
+                started.pid,
+                resources,
+                RuntimeMetadata {
+                    network_mode: network_mode.as_str(),
+                    security_profile: security_profile.as_str(),
+                    log_mode: log_mode.as_str(),
+                    userns_mode: userns_mode.as_str(),
+                    rootfs_mode: rootfs.mode.as_str(),
+                    policy_profile: policy_profile.as_str(),
+                    tty: options.tty,
+                },
+            )?
+        };
+        state::save(&state)?;
+        audit_log::append_simple(id, "lifecycle", "started", Some("running"))?;
+        running_state = Some(state);
+        Ok(())
+    };
+
+    let process_config = ProcessConfig::builder()
+        .id(id)
+        .hostname(config.hostname.as_deref())
+        .args(&config.process.args)
+        .env(&config.process.env)
+        .cwd(config.process.cwd.as_deref())
+        .rootfs(&rootfs.path)
+        .overlay_config(rootfs.overlay_config)
+        .readonly_rootfs(config.root.readonly)
+        .mounts(&config.mounts)
+        .process_user(config.process.user.as_ref())
+        .rlimits(&config.process.rlimits)
+        .masked_paths(masked_paths)
+        .readonly_paths(readonly_paths)
+        .log_path(options.capture_logs.then_some(&log_path))
+        .flags(flags)
+        .cgroup_config(effective_policy.cgroup_config)
+        .network_mode(network_mode)
+        .security_profile(security_profile)
+        .userns_mode(userns_mode)
+        .tty(options.tty)
+        .build()?;
+
+    let process_exit = run_process(process_config, &mut save_started_state)?;
+    let exit_code = process_exit.code;
+    let exit_signal = process_exit.signal.clone();
+    let child_error = process_exit.error.clone();
+
+    if let Some(mut state) = running_state {
+        state
+            .mark_stopped(exit_code, exit_signal.clone())
+            .context("failed to update stopped state")?;
+        state::save(&state)?;
+        let mut event = AuditEvent::new(id, "lifecycle", "stopped").with_status("stopped");
+        if let Some(code) = exit_code.and_then(|code| u64::try_from(code).ok()) {
+            event = event.with_value(code);
+        }
+        audit_log::append(&event)?;
+    }
+
+    Ok(ContainerRunReport {
+        exit_code,
+        exit_signal,
+        child_error,
+        warnings: vec![],
+    })
 }
 
 #[cfg(test)]
