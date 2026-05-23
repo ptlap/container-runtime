@@ -10,7 +10,7 @@ use container_runtime::events::stream_counter_events;
 use container_runtime::health::{self, HealthResult};
 use container_runtime::image;
 use container_runtime::inspect_security;
-use container_runtime::lifecycle::{self, CreateOptions};
+use container_runtime::lifecycle::{self, CreateOptions, StopOutcome};
 use container_runtime::modes::{
     parse_log_mode, parse_network_mode, parse_security_profile, LogMode,
 };
@@ -1007,22 +1007,26 @@ fn kill_container(id: &str, signal: &str) -> Result<()> {
 }
 
 fn stop_container(id: &str, timeout_secs: u64) -> Result<()> {
-    kill_container(id, "SIGTERM")?;
+    let outcome = lifecycle::stop(
+        id,
+        Duration::from_secs(timeout_secs),
+        |report| {
+            println!(
+                "sent signal {} to container {} pid {}",
+                report.signal, report.id, report.pid
+            );
+        },
+        || {
+            println!("container {id} did not stop after {timeout_secs}s; sending SIGKILL");
+        },
+    )?;
 
-    if lifecycle::wait_for_stopped(id, Duration::from_secs(timeout_secs))? {
-        println!("container stopped: {id}");
-        return Ok(());
+    match outcome {
+        StopOutcome::StoppedViaSigterm => println!("container stopped: {id}"),
+        StopOutcome::StoppedViaSigkill => println!("container killed: {id}"),
     }
 
-    println!("container {id} did not stop after {timeout_secs}s; sending SIGKILL");
-    kill_container(id, "SIGKILL")?;
-
-    if lifecycle::wait_for_stopped(id, Duration::from_secs(5))? {
-        println!("container killed: {id}");
-        return Ok(());
-    }
-
-    Err(LifecycleError::StopDidNotComplete { id: id.to_string() }.into())
+    Ok(())
 }
 
 fn delete_container(id: &str) -> Result<()> {

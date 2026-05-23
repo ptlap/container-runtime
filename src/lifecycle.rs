@@ -41,6 +41,12 @@ pub struct ContainerRunReport {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopOutcome {
+    StoppedViaSigterm,
+    StoppedViaSigkill,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CreateOptions<'a> {
     pub id: &'a str,
@@ -125,6 +131,30 @@ pub fn send_container_signal(id: &str, signal: &str) -> Result<KillReport> {
         signal: signal.to_string(),
         signal_number,
     })
+}
+
+pub fn stop(
+    id: &str,
+    timeout: Duration,
+    mut on_signal_sent: impl FnMut(&KillReport),
+    mut on_sigkill_warning: impl FnMut(),
+) -> Result<StopOutcome> {
+    let report = send_container_signal(id, "SIGTERM")?;
+    on_signal_sent(&report);
+
+    if wait_for_stopped(id, timeout)? {
+        return Ok(StopOutcome::StoppedViaSigterm);
+    }
+
+    on_sigkill_warning();
+    let report = send_container_signal(id, "SIGKILL")?;
+    on_signal_sent(&report);
+
+    if wait_for_stopped(id, Duration::from_secs(5))? {
+        return Ok(StopOutcome::StoppedViaSigkill);
+    }
+
+    Err(LifecycleError::StopDidNotComplete { id: id.to_string() }.into())
 }
 
 pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
