@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use nix::unistd::{chdir, pivot_root};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 use tracing::warn;
 
-use crate::error::FilesystemError;
+use crate::error::{FilesystemError, OciConfigError};
 use crate::spec::config::{CrunConfig, Mount};
 
 #[derive(Debug, Clone)]
@@ -164,29 +165,53 @@ pub fn setup_rootfs(rootfs: &Path, readonly: bool, mounts: &[Mount]) -> Result<(
         warn!("could not remove .old_root: {error}");
     }
 
-    let proc_dir = Path::new("/proc");
+    // The bundle owns any destination it declares; the built-in defaults below
+    // only fill in what it left out, so a minimal bundle still gets a usable
+    // /proc and /dev.
+    let declared = declared_destinations(mounts);
 
-    if !proc_dir.exists() {
-        fs::create_dir_all(proc_dir).context("failed to create /proc")?;
+    if !declared.contains("/proc") {
+        let proc_dir = Path::new("/proc");
+
+        if !proc_dir.exists() {
+            fs::create_dir_all(proc_dir).context("failed to create /proc")?;
+        }
+
+        mount(
+            Some("proc"),
+            "/proc",
+            Some("proc"),
+            MsFlags::empty(),
+            None::<&str>,
+        )
+        .context("failed to mount proc")?;
     }
 
-    mount(
-        Some("proc"),
-        "/proc",
-        Some("proc"),
-        MsFlags::empty(),
-        None::<&str>,
-    )
-    .context("failed to mount proc")?;
-
-    setup_dns()?;
-    setup_dev()?;
+    setup_dns(&declared)?;
+    setup_dev(&declared)?;
 
     if readonly {
         remount_root_readonly()?;
     }
 
     Ok(())
+}
+
+/// Normalized set of mount destinations declared by the bundle.
+fn declared_destinations(mounts: &[Mount]) -> BTreeSet<String> {
+    mounts
+        .iter()
+        .map(|mount| normalize_destination(&mount.destination))
+        .collect()
+}
+
+fn normalize_destination(destination: &str) -> String {
+    let trimmed = destination.trim_end_matches('/');
+    if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 pub fn apply_oci_linux_paths(masked_paths: &[String], readonly_paths: &[String]) -> Result<()> {
@@ -256,10 +281,134 @@ fn make_container_path_readonly(path: &Path) -> Result<()> {
 
 fn setup_mounts(rootfs: &Path, mounts: &[Mount]) -> Result<()> {
     for mount_config in mounts {
-        setup_bind_mount(rootfs, mount_config)?;
+        setup_mount(rootfs, mount_config)?;
     }
 
     Ok(())
+}
+
+/// Dispatches an OCI `mounts[]` entry by its filesystem type.
+///
+/// Bundles produced by standard tooling (umoci, runc) declare `proc`, `sysfs`,
+/// `tmpfs`, `devpts` and `mqueue` entries whose `source` is a filesystem name
+/// rather than a host path, so treating every entry as a bind mount fails on
+/// them.
+fn setup_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
+    if mount_config.is_bind() {
+        return setup_bind_mount(rootfs, mount_config);
+    }
+
+    match mount_config.mount_type.as_str() {
+        "proc" | "sysfs" | "tmpfs" | "devpts" | "mqueue" | "cgroup" | "cgroup2" | "ramfs" => {
+            setup_filesystem_mount(rootfs, mount_config)
+        }
+        value => Err(OciConfigError::UnsupportedMountType {
+            mount_type: value.to_string(),
+        }
+        .into()),
+    }
+}
+
+fn setup_filesystem_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
+    let destination = container_mount_destination(rootfs, &mount_config.destination)?;
+    fs::create_dir_all(&destination).with_context(|| {
+        format!(
+            "failed to create mount destination: {}",
+            destination.display()
+        )
+    })?;
+
+    let options = MountOptions::parse(&mount_config.options);
+    let filesystem = filesystem_type(&mount_config.mount_type);
+    let source = mount_config.source.as_deref().unwrap_or(filesystem);
+
+    mount(
+        Some(source),
+        destination.as_path(),
+        Some(filesystem),
+        options.flags,
+        options.data.as_deref(),
+    )
+    .with_context(|| format!("failed to mount {filesystem} at {}", destination.display()))?;
+
+    if let Some(propagation) = options.propagation {
+        mount::<str, Path, str, str>(None, destination.as_path(), None, propagation, None)
+            .with_context(|| {
+                format!(
+                    "failed to set mount propagation for {}",
+                    destination.display()
+                )
+            })?;
+    }
+
+    Ok(())
+}
+
+/// Maps an OCI filesystem type onto what this runtime can actually mount.
+///
+/// The runtime targets cgroup v2 only, and a `cgroup` mount fails on a unified
+/// hierarchy, so bundles asking for the v1 type get `cgroup2`.
+fn filesystem_type(mount_type: &str) -> &str {
+    match mount_type {
+        "cgroup" => "cgroup2",
+        other => other,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct MountOptions {
+    flags: MsFlags,
+    /// Propagation is applied by a second `mount` call because the kernel
+    /// rejects it being combined with any other flag.
+    propagation: Option<MsFlags>,
+    data: Option<String>,
+}
+
+impl MountOptions {
+    fn parse(options: &[String]) -> Self {
+        let mut flags = MsFlags::empty();
+        let mut propagation = None;
+        let mut data = Vec::new();
+
+        for option in options {
+            match option.as_str() {
+                "defaults" | "bind" | "rbind" => {}
+                "ro" => flags |= MsFlags::MS_RDONLY,
+                "rw" => flags.remove(MsFlags::MS_RDONLY),
+                "nosuid" => flags |= MsFlags::MS_NOSUID,
+                "suid" => flags.remove(MsFlags::MS_NOSUID),
+                "nodev" => flags |= MsFlags::MS_NODEV,
+                "dev" => flags.remove(MsFlags::MS_NODEV),
+                "noexec" => flags |= MsFlags::MS_NOEXEC,
+                "exec" => flags.remove(MsFlags::MS_NOEXEC),
+                "sync" => flags |= MsFlags::MS_SYNCHRONOUS,
+                "dirsync" => flags |= MsFlags::MS_DIRSYNC,
+                "remount" => flags |= MsFlags::MS_REMOUNT,
+                "noatime" => flags |= MsFlags::MS_NOATIME,
+                "atime" => flags.remove(MsFlags::MS_NOATIME),
+                "nodiratime" => flags |= MsFlags::MS_NODIRATIME,
+                "relatime" => flags |= MsFlags::MS_RELATIME,
+                "norelatime" => flags.remove(MsFlags::MS_RELATIME),
+                "strictatime" => flags |= MsFlags::MS_STRICTATIME,
+                "nostrictatime" => flags.remove(MsFlags::MS_STRICTATIME),
+                "private" => propagation = Some(MsFlags::MS_PRIVATE),
+                "rprivate" => propagation = Some(MsFlags::MS_PRIVATE | MsFlags::MS_REC),
+                "slave" => propagation = Some(MsFlags::MS_SLAVE),
+                "rslave" => propagation = Some(MsFlags::MS_SLAVE | MsFlags::MS_REC),
+                "shared" => propagation = Some(MsFlags::MS_SHARED),
+                "rshared" => propagation = Some(MsFlags::MS_SHARED | MsFlags::MS_REC),
+                "unbindable" => propagation = Some(MsFlags::MS_UNBINDABLE),
+                "runbindable" => propagation = Some(MsFlags::MS_UNBINDABLE | MsFlags::MS_REC),
+                value => data.push(value),
+            }
+        }
+
+        Self {
+            flags,
+            propagation,
+            data: (!data.is_empty()).then(|| data.join(",")),
+        }
+    }
 }
 
 fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
@@ -410,22 +559,67 @@ fn remount_root_readonly() -> Result<()> {
     Ok(())
 }
 
-fn setup_dev() -> Result<()> {
-    fs::create_dir_all("/dev").context("failed to create /dev")?;
+fn setup_dev(declared: &BTreeSet<String>) -> Result<()> {
+    if !declared.contains("/dev") {
+        fs::create_dir_all("/dev").context("failed to create /dev")?;
 
-    mount(
-        Some("tmpfs"),
-        "/dev",
-        Some("tmpfs"),
-        MsFlags::MS_NOSUID | MsFlags::MS_STRICTATIME,
-        Some("mode=755"),
-    )
-    .context("failed to mount tmpfs on /dev")?;
+        mount(
+            Some("tmpfs"),
+            "/dev",
+            Some("tmpfs"),
+            MsFlags::MS_NOSUID | MsFlags::MS_STRICTATIME,
+            Some("mode=755"),
+        )
+        .context("failed to mount tmpfs on /dev")?;
+    }
 
     create_char_device("/dev/null", 1, 3, 0o666)?;
     create_char_device("/dev/zero", 1, 5, 0o666)?;
     create_char_device("/dev/random", 1, 8, 0o666)?;
     create_char_device("/dev/urandom", 1, 9, 0o666)?;
+
+    if !declared.contains("/dev/shm") {
+        setup_dev_shm()?;
+    }
+
+    setup_dev_fd_links()?;
+
+    Ok(())
+}
+
+/// POSIX shared memory. Workloads such as PostgreSQL fail to start without it.
+fn setup_dev_shm() -> Result<()> {
+    let path = Path::new("/dev/shm");
+    fs::create_dir_all(path).context("failed to create /dev/shm")?;
+
+    mount(
+        Some("shm"),
+        path,
+        Some("tmpfs"),
+        MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+        Some("mode=1777,size=65536k"),
+    )
+    .context("failed to mount tmpfs on /dev/shm")
+}
+
+/// Standard descriptor symlinks. Container images commonly redirect their logs
+/// to /dev/stdout, and the process aborts at startup when it cannot open it.
+fn setup_dev_fd_links() -> Result<()> {
+    let links = [
+        ("/proc/self/fd", "/dev/fd"),
+        ("/proc/self/fd/0", "/dev/stdin"),
+        ("/proc/self/fd/1", "/dev/stdout"),
+        ("/proc/self/fd/2", "/dev/stderr"),
+    ];
+
+    for (target, link) in links {
+        let link_path = Path::new(link);
+        if link_path.exists() || link_path.is_symlink() {
+            continue;
+        }
+        std::os::unix::fs::symlink(target, link_path)
+            .with_context(|| format!("failed to link {link} to {target}"))?;
+    }
 
     Ok(())
 }
@@ -457,7 +651,11 @@ fn create_char_device(path: &str, major: u64, minor: u64, mode: u32) -> Result<(
     Ok(())
 }
 
-fn setup_dns() -> Result<()> {
+fn setup_dns(declared: &BTreeSet<String>) -> Result<()> {
+    if declared.contains("/etc/resolv.conf") {
+        return Ok(());
+    }
+
     fs::create_dir_all("/etc").context("failed to create /etc")?;
 
     fs::write(
@@ -473,6 +671,88 @@ fn setup_dns() -> Result<()> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn mount_entry(destination: &str, mount_type: &str, options: &[&str]) -> Mount {
+        serde_json::from_value(serde_json::json!({
+            "destination": destination,
+            "type": mount_type,
+            "options": options,
+        }))
+        .expect("mount should deserialize")
+    }
+
+    #[test]
+    fn parses_mount_flags_options_and_data_separately() {
+        let options = MountOptions::parse(&[
+            "nosuid".to_string(),
+            "noexec".to_string(),
+            "nodev".to_string(),
+            "mode=1777".to_string(),
+            "size=65536k".to_string(),
+        ]);
+
+        assert!(options.flags.contains(MsFlags::MS_NOSUID));
+        assert!(options.flags.contains(MsFlags::MS_NOEXEC));
+        assert!(options.flags.contains(MsFlags::MS_NODEV));
+        assert_eq!(options.data.as_deref(), Some("mode=1777,size=65536k"));
+        assert_eq!(options.propagation, None);
+    }
+
+    #[test]
+    fn keeps_propagation_out_of_the_main_mount_flags() {
+        let options = MountOptions::parse(&["ro".to_string(), "rslave".to_string()]);
+
+        assert!(options.flags.contains(MsFlags::MS_RDONLY));
+        assert!(!options.flags.contains(MsFlags::MS_SLAVE));
+        assert_eq!(
+            options.propagation,
+            Some(MsFlags::MS_SLAVE | MsFlags::MS_REC)
+        );
+    }
+
+    #[test]
+    fn later_mount_options_override_earlier_ones() {
+        let options = MountOptions::parse(&["ro".to_string(), "rw".to_string()]);
+
+        assert!(!options.flags.contains(MsFlags::MS_RDONLY));
+    }
+
+    #[test]
+    fn maps_cgroup_mounts_to_the_unified_hierarchy() {
+        assert_eq!(filesystem_type("cgroup"), "cgroup2");
+        assert_eq!(filesystem_type("proc"), "proc");
+        assert_eq!(filesystem_type("tmpfs"), "tmpfs");
+    }
+
+    #[test]
+    fn detects_bind_mounts_by_type_or_option() {
+        assert!(mount_entry("/data", "bind", &[]).is_bind());
+        assert!(mount_entry("/data", "none", &["rbind"]).is_bind());
+        assert!(!mount_entry("/proc", "proc", &[]).is_bind());
+        assert!(!mount_entry("/dev/shm", "tmpfs", &["nosuid"]).is_bind());
+    }
+
+    #[test]
+    fn collects_declared_destinations_without_trailing_slashes() {
+        let mounts = vec![
+            mount_entry("/proc", "proc", &[]),
+            mount_entry("/dev/shm/", "tmpfs", &[]),
+        ];
+        let declared = declared_destinations(&mounts);
+
+        assert!(declared.contains("/proc"));
+        assert!(declared.contains("/dev/shm"));
+        assert!(!declared.contains("/dev"));
+    }
+
+    #[test]
+    fn rejects_unsupported_mount_types() {
+        let rootfs = unique_temp_path("unsupported-type");
+        let error = setup_mount(&rootfs, &mount_entry("/data", "nfs", &[]))
+            .expect_err("unsupported type should be rejected");
+
+        assert!(error.to_string().contains("nfs"));
+    }
 
     fn unique_temp_path(name: &str) -> PathBuf {
         let nanos = SystemTime::now()

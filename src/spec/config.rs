@@ -161,6 +161,38 @@ pub struct Mount {
     pub options: Vec<String>,
 }
 
+impl Mount {
+    /// A mount is a bind when it says so through its type or its options. OCI
+    /// bundles use both spellings, and `none` with a `bind` option is what runc
+    /// and umoci emit.
+    pub fn is_bind(&self) -> bool {
+        matches!(self.mount_type.as_str(), "bind" | "rbind" | "none")
+            || self
+                .options
+                .iter()
+                .any(|option| option == "bind" || option == "rbind")
+    }
+}
+
+/// Filesystem types this runtime knows how to mount. Bundles produced by umoci
+/// and runc declare `proc`, `sysfs`, `tmpfs`, `devpts` and `mqueue` entries.
+pub fn is_supported_mount_type(mount_type: &str) -> bool {
+    matches!(
+        mount_type,
+        "bind"
+            | "rbind"
+            | "none"
+            | "proc"
+            | "sysfs"
+            | "tmpfs"
+            | "devpts"
+            | "mqueue"
+            | "cgroup"
+            | "cgroup2"
+            | "ramfs"
+    )
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Linux {
     #[serde(default)]
@@ -229,12 +261,14 @@ impl OciConfig {
             if mount.destination.trim().is_empty() {
                 return Err(OciConfigError::EmptyMountDestination);
             }
-            if mount.mount_type != "bind" {
+            if !is_supported_mount_type(&mount.mount_type) {
                 return Err(OciConfigError::UnsupportedMountType {
                     mount_type: mount.mount_type.clone(),
                 });
             }
-            if mount.source.as_deref().unwrap_or("").trim().is_empty() {
+            // Only bind mounts name a host path; filesystem mounts default
+            // their source to the filesystem type.
+            if mount.is_bind() && mount.source.as_deref().unwrap_or("").trim().is_empty() {
                 return Err(OciConfigError::EmptyBindMountSource);
             }
         }
@@ -515,7 +549,7 @@ mod tests {
                     {
                         "destination": "/data",
                         "source": "/tmp/data",
-                        "type": "tmpfs"
+                        "type": "nfs"
                     }
                 ]
             }"#,
@@ -524,8 +558,47 @@ mod tests {
 
         assert!(matches!(
             error,
-            OciConfigError::UnsupportedMountType { mount_type } if mount_type == "tmpfs"
+            OciConfigError::UnsupportedMountType { mount_type } if mount_type == "nfs"
         ));
+    }
+
+    #[test]
+    fn accepts_filesystem_mounts_without_a_host_source() {
+        let config = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "mounts": [
+                    { "destination": "/proc", "type": "proc", "source": "proc" },
+                    { "destination": "/dev", "type": "tmpfs", "source": "tmpfs",
+                      "options": ["nosuid", "strictatime", "mode=755", "size=65536k"] },
+                    { "destination": "/dev/pts", "type": "devpts", "source": "devpts",
+                      "options": ["nosuid", "noexec", "newinstance", "ptmxmode=0666"] },
+                    { "destination": "/sys", "type": "sysfs", "source": "sysfs",
+                      "options": ["nosuid", "noexec", "nodev", "ro"] }
+                ]
+            }"#,
+        )
+        .expect("an OCI bundle mount set should be accepted");
+
+        assert_eq!(config.mounts.len(), 4);
+        assert!(config.mounts.iter().all(|mount| !mount.is_bind()));
+    }
+
+    #[test]
+    fn still_requires_a_source_for_bind_mounts() {
+        let error = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "mounts": [
+                    { "destination": "/data", "type": "bind", "options": ["rbind"] }
+                ]
+            }"#,
+        )
+        .expect_err("bind mount without a source should be rejected");
+
+        assert!(matches!(error, OciConfigError::EmptyBindMountSource));
     }
 
     #[test]
