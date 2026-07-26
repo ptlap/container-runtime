@@ -350,3 +350,94 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    ```bash
    rm -rf /tmp/bad-bundle
    ```
+
+---
+
+### Kịch Bản 13: Học Tập Syscall (Seccomp Learn Mode)
+*Kiểm chứng: Runtime quan sát và ghi lại đúng tập syscall mà workload thực sự dùng.*
+
+1. **Chạy container ở chế độ học**:
+   ```bash
+   sudo target/release/crun run --net none --log on \
+     --seccomp learn --seccomp-out /tmp/learn.json \
+     learn-demo examples/bundle
+   ```
+   *Yêu cầu*: Container chạy và thoát bình thường. Không có syscall nào bị chặn.
+2. **Kiểm tra capture**:
+   ```bash
+   jq '{events: .totalEvents, unique: (.syscalls|length), processes: .processesSeen}' /tmp/learn.json
+   jq '.syscalls.execve' /tmp/learn.json
+   ```
+   *Yêu cầu*: `events` > 0, `unique` vài chục syscall, và `execve` xuất hiện ít nhất 1 lần (chính là lệnh exec của container).
+3. **Kiểm tra log vẫn thu được** (đây là chỗ dễ hỏng nhất: tracer sở hữu `waitpid(-1)` nên nuốt cả exit status của log helper):
+   ```bash
+   sudo target/release/crun logs learn-demo
+   ```
+   *Yêu cầu*: In ra output của container, không treo.
+4. **Dọn dẹp**:
+   ```bash
+   sudo target/release/crun delete learn-demo
+   ```
+
+---
+
+### Kịch Bản 14: Sinh Và Thực Thi Profile (Generate & Enforce)
+*Kiểm chứng: Profile sinh ra đúng schema OCI và đủ để chạy lại chính workload đó.*
+
+1. **Sinh profile từ capture**:
+   ```bash
+   sudo target/release/crun seccomp generate --capture /tmp/learn.json \
+     -o /tmp/learn.seccomp.json --name demo
+   ```
+   *Yêu cầu*: In ra `allowed_count`, `observed_syscalls`, `baseline_syscalls`. Tổng phải bằng `observed + baseline`.
+2. **Kiểm tra định dạng OCI**:
+   ```bash
+   jq '{defaultAction, architectures, names: (.syscalls[0].names|length)}' /tmp/learn.seccomp.json
+   ```
+   *Yêu cầu*: `defaultAction` là `SCMP_ACT_ERRNO`, `architectures` chứa `SCMP_ARCH_X86_64`. File này phải dùng được nguyên vẹn với runc.
+3. **Chạy lại dưới profile vừa sinh**:
+   ```bash
+   sudo target/release/crun run --net none --log on \
+     --seccomp enforce --seccomp-profile /tmp/learn.seccomp.json \
+     enforce-demo examples/bundle
+   sudo target/release/crun logs enforce-demo
+   ```
+   *Yêu cầu*: Container chạy đúng như lần học, output giống hệt.
+4. **Xác nhận syscall ngoài profile bị chặn**:
+   ```bash
+   sudo target/release/crun inspect-security enforce-demo
+   ```
+   *Yêu cầu*: Báo `seccomp_runtime_mode: enforce` và `seccomp_allowed_syscalls` bằng số syscall trong profile.
+5. **Dọn dẹp**:
+   ```bash
+   sudo target/release/crun delete enforce-demo
+   ```
+
+---
+
+### Kịch Bản 15: Đo Mức Giảm Bề Mặt Tấn Công (Compare)
+*Kiểm chứng: Các con số dùng cho chương đánh giá được tính đúng.*
+
+1. **So với profile mặc định của Docker**:
+   ```bash
+   target/release/crun seccomp compare /tmp/learn.seccomp.json \
+     --baseline third_party/moby-profiles/seccomp/default.json \
+     --cve-map data/cve-syscall-map.json
+   ```
+   *Yêu cầu*: `baseline_allowed` phải là **296** trên x86_64 — không phải 441. Con số 441 là đếm cả rule bị gate theo capability mà container mặc định không có; dùng nó sẽ thổi phồng mọi tỉ lệ giảm.
+2. **Kiểm tra `over_allowed`**:
+   *Yêu cầu*: Bằng 0 với workload thông thường. Khác 0 nghĩa là workload dùng syscall mà Docker chặn — đó là một phát hiện cần giải thích trong báo cáo, không phải lỗi.
+3. **Kiểm tra dữ liệu CVE**:
+   ```bash
+   scripts/check-cve-map.py
+   ```
+   *Yêu cầu*: 0 error. Các warning `confidence is medium` là nhắc nhở phải đối chiếu NVD trước khi đưa số vào báo cáo.
+4. **Chế độ dry-run** (đo false-denial mà không làm gãy workload):
+   ```bash
+   sudo target/release/crun doctor | grep -i seccomp || echo "kernel hỗ trợ SECCOMP_RET_LOG"
+   sudo target/release/crun run --net none --log on \
+     --seccomp enforce --seccomp-profile /tmp/learn.seccomp.json \
+     --seccomp-action log dryrun-demo examples/bundle
+   sudo target/release/crun delete dryrun-demo
+   ```
+   *Yêu cầu*: Container chạy bình thường; syscall lẽ ra bị chặn được ghi vào audit log thay vì bị từ chối.

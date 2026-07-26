@@ -6,7 +6,8 @@ This is a Rust container-runtime prototype. Core source lives in `src/`:
 `main.rs` defines the `crun` CLI, `lib.rs` exports modules, and submodules cover
 container orchestration, cgroups, filesystem setup, namespaces, networking, and
 OCI-like config parsing. Example runtime input is in `examples/bundle/`. Project
-notes and planning live in `docs/`, especially `docs/BLUEPRINT.md`. Scripts for
+notes and planning live in `docs/`, especially `docs/ROADMAP.md`, with
+evaluation notes under `docs/research/` and results under `docs/benchmark/`. Scripts for
 rootfs setup and benchmarking belong in `scripts/`. Tests are split under
 `tests/unit/` and `tests/integration/`; benchmarks live in `benches/`.
 
