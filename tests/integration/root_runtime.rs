@@ -199,6 +199,272 @@ fn wait_until_running(id: &str) {
     panic!("container {id} did not become running");
 }
 
+/// Removes a temporary file when the test ends, however it ends.
+struct TempFile {
+    path: PathBuf,
+}
+
+impl TempFile {
+    fn new(name: &str) -> Self {
+        Self {
+            path: std::env::temp_dir().join(unique_name(name)),
+        }
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn learn_capture(id: &str, bundle: &Path, capture: &Path, args_note: &str) -> Output {
+    let output = Command::new(crun())
+        .args([
+            "run",
+            "--net",
+            "none",
+            "--security",
+            "unconfined",
+            "--log",
+            "on",
+            "--seccomp",
+            "learn",
+            "--seccomp-out",
+        ])
+        .arg(capture)
+        .arg(id)
+        .arg(bundle)
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run crun for {args_note}: {error}"));
+    assert_success(&output);
+    output
+}
+
+#[test]
+#[ignore = "requires root"]
+fn learn_mode_captures_the_syscalls_a_container_makes() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-learn");
+    let bundle = TestBundle::new("bundle-learn", &["/bin/sh", "-c", "echo learning"], "")
+        .expect("bundle should be created");
+    let capture = TempFile::new("capture.json");
+
+    learn_capture(&id, &bundle.path, &capture.path, "learn mode");
+    assert_success(&run_crun(&["delete", &id]));
+
+    let content = fs::read_to_string(&capture.path).expect("capture should be written");
+    let capture: Value = serde_json::from_str(&content).expect("capture should be json");
+
+    assert!(capture["totalEvents"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        capture["syscalls"]["execve"].as_u64().unwrap_or(0) >= 1,
+        "the exec of the container process must be observed: {capture}"
+    );
+    assert!(
+        capture["syscalls"]
+            .as_object()
+            .is_some_and(|map| map.len() > 5),
+        "a shell should use more than a handful of syscalls: {capture}"
+    );
+}
+
+#[test]
+#[ignore = "requires root"]
+fn learn_mode_follows_child_processes() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-learn-fork");
+    let bundle = TestBundle::new(
+        "bundle-learn-fork",
+        &["/bin/sh", "-c", "(/bin/true) & wait"],
+        "",
+    )
+    .expect("bundle should be created");
+    let capture = TempFile::new("capture-fork.json");
+
+    learn_capture(&id, &bundle.path, &capture.path, "forking workload");
+    assert_success(&run_crun(&["delete", &id]));
+
+    let content = fs::read_to_string(&capture.path).expect("capture should be written");
+    let capture: Value = serde_json::from_str(&content).expect("capture should be json");
+
+    assert!(
+        capture["processesSeen"].as_u64().unwrap_or(0) >= 2,
+        "the forked child must be traced too: {capture}"
+    );
+}
+
+#[test]
+#[ignore = "requires root"]
+fn learn_mode_still_captures_container_logs() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    // Regression test for the tracer owning waitpid(-1): it reaps the log
+    // helper too, and the exit status has to be handed back rather than lost.
+    let id = unique_name("root-learn-log");
+    let bundle = TestBundle::new(
+        "bundle-learn-log",
+        &["/bin/sh", "-c", "echo log-through-learn"],
+        "",
+    )
+    .expect("bundle should be created");
+    let capture = TempFile::new("capture-log.json");
+
+    learn_capture(&id, &bundle.path, &capture.path, "log capture");
+
+    let logs = run_crun(&["logs", &id]);
+    assert_success(&logs);
+    assert!(
+        String::from_utf8_lossy(&logs.stdout).contains("log-through-learn"),
+        "container output must survive learn mode"
+    );
+    assert_success(&run_crun(&["delete", &id]));
+}
+
+#[test]
+#[ignore = "requires root"]
+fn a_generated_profile_runs_the_workload_it_was_learned_from() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let learn_id = unique_name("root-gen-learn");
+    let bundle = TestBundle::new("bundle-gen", &["/bin/sh", "-c", "echo generated"], "")
+        .expect("bundle should be created");
+    let capture = TempFile::new("capture-gen.json");
+    let profile = TempFile::new("profile-gen.json");
+
+    learn_capture(&learn_id, &bundle.path, &capture.path, "profile generation");
+    assert_success(&run_crun(&["delete", &learn_id]));
+
+    let generate = Command::new(crun())
+        .arg("seccomp")
+        .arg("generate")
+        .arg("--capture")
+        .arg(&capture.path)
+        .arg("-o")
+        .arg(&profile.path)
+        .arg("--name")
+        .arg("shell")
+        .output()
+        .expect("failed to run crun seccomp generate");
+    assert_success(&generate);
+
+    let content = fs::read_to_string(&profile.path).expect("profile should be written");
+    let parsed: Value = serde_json::from_str(&content).expect("profile should be json");
+    assert_eq!(parsed["defaultAction"], "SCMP_ACT_ERRNO");
+    assert!(parsed["syscalls"][0]["names"]
+        .as_array()
+        .is_some_and(|names| !names.is_empty()));
+
+    let enforce_id = unique_name("root-gen-enforce");
+    let enforced = Command::new(crun())
+        .args([
+            "run",
+            "--net",
+            "none",
+            "--security",
+            "unconfined",
+            "--log",
+            "on",
+            "--seccomp",
+            "enforce",
+            "--seccomp-profile",
+        ])
+        .arg(&profile.path)
+        .arg(&enforce_id)
+        .arg(&bundle.path)
+        .output()
+        .expect("failed to run the enforced container");
+    assert_success(&enforced);
+
+    let logs = run_crun(&["logs", &enforce_id]);
+    assert_success(&logs);
+    assert!(
+        String::from_utf8_lossy(&logs.stdout).contains("generated"),
+        "the workload must still run under its own profile"
+    );
+    assert_success(&run_crun(&["delete", &enforce_id]));
+}
+
+#[test]
+#[ignore = "requires root"]
+fn an_enforced_profile_denies_a_syscall_it_never_learned() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    // Learned from a trivial command, then used to run one that needs chmod.
+    let learn_id = unique_name("root-deny-learn");
+    let learn_bundle =
+        TestBundle::new("bundle-deny-learn", &["/bin/true"], "").expect("bundle should be created");
+    let capture = TempFile::new("capture-deny.json");
+    let profile = TempFile::new("profile-deny.json");
+
+    learn_capture(&learn_id, &learn_bundle.path, &capture.path, "denial");
+    assert_success(&run_crun(&["delete", &learn_id]));
+
+    let generate = Command::new(crun())
+        .arg("seccomp")
+        .arg("generate")
+        .arg("--capture")
+        .arg(&capture.path)
+        .arg("-o")
+        .arg(&profile.path)
+        .output()
+        .expect("failed to run crun seccomp generate");
+    assert_success(&generate);
+
+    let deny_id = unique_name("root-deny-run");
+    let deny_bundle = TestBundle::new(
+        "bundle-deny-run",
+        &["/bin/sh", "-c", "chmod 0777 /tmp || echo denied"],
+        "",
+    )
+    .expect("bundle should be created");
+
+    let output = Command::new(crun())
+        .args([
+            "run",
+            "--net",
+            "none",
+            "--security",
+            "unconfined",
+            "--log",
+            "on",
+            "--seccomp",
+            "enforce",
+            "--seccomp-profile",
+        ])
+        .arg(&profile.path)
+        .arg(&deny_id)
+        .arg(&deny_bundle.path)
+        .output()
+        .expect("failed to run the enforced container");
+
+    let logs = run_crun(&["logs", &deny_id]);
+    let logs = String::from_utf8_lossy(&logs.stdout).to_string();
+    let _ = run_crun(&["delete", &deny_id]);
+
+    assert!(
+        logs.contains("denied") || !output.status.success(),
+        "a syscall outside the profile must be refused; logs: {logs}"
+    );
+}
+
 #[test]
 #[ignore = "requires root"]
 fn container_env_is_not_inherited_from_host() {

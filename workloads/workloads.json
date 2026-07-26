@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "note": "Images are pinned by digest so the syscall sets and the numbers derived from them are reproducible. Refresh a digest with scripts/build-workloads.sh --update-digest <name>.",
+  "workloads": [
+    {
+      "name": "busybox",
+      "image": "docker.io/library/busybox:1.37",
+      "digest": "sha256:7a3ebe5bfd1a4a19797d20b0c0bb39d44393e9a03fd852c0865b0f540d868df0",
+      "description": "Static-ish shell. The floor of the syscall spectrum and the control case.",
+      "args_override": [
+        "/bin/sh",
+        "-c",
+        "echo ready; sleep 300"
+      ],
+      "ready_log": "ready",
+      "smoke": [
+        "/bin/sh",
+        "-c",
+        "echo ok && ls / >/dev/null"
+      ],
+      "net": "none"
+    },
+    {
+      "name": "redis",
+      "image": "docker.io/library/redis:7.4-alpine",
+      "digest": "sha256:9702d01c1f10c3ea9f48211b4362e44f154ff02d063e6f7268eba804059f53bf",
+      "description": "Single process event loop.",
+      "args_override": [
+        "redis-server",
+        "--save",
+        "",
+        "--appendonly",
+        "no",
+        "--protected-mode",
+        "no"
+      ],
+      "ready_exec": [
+        "redis-cli",
+        "ping"
+      ],
+      "ready_expect": "PONG",
+      "smoke": [
+        "/bin/sh",
+        "-c",
+        "redis-cli set k v >/dev/null && redis-cli get k"
+      ],
+      "smoke_expect": "v",
+      "net": "none"
+    },
+    {
+      "name": "nginx",
+      "image": "docker.io/library/nginx:1.27-alpine",
+      "digest": "sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8",
+      "description": "Master plus workers.",
+      "ready_exec": [
+        "/bin/sh",
+        "-c",
+        "wget -qO- http://127.0.0.1/ | head -1"
+      ],
+      "ready_expect": "<!DOCTYPE html>",
+      "smoke": [
+        "/bin/sh",
+        "-c",
+        "wget -qO- http://127.0.0.1/ | grep -c nginx"
+      ],
+      "net": "none",
+      "rootfs_fixups": [
+        {
+          "kind": "replace_symlink_with_file",
+          "paths": [
+            "/var/log/nginx/access.log",
+            "/var/log/nginx/error.log"
+          ],
+          "why": "The image points these at /dev/stdout and /dev/stderr. The runtime now creates those links, but keeping them as regular files removes the dependency from the measurement."
+        }
+      ]
+    },
+    {
+      "name": "python",
+      "image": "docker.io/library/python:3.12-slim",
+      "digest": "sha256:cab2dbf575e971934a81e4622f5aba17aa7929719bd7e31033a3a83b97fd0464",
+      "description": "Interpreter startup. The upper end of the syscall spectrum.",
+      "args_override": [
+        "python3",
+        "-m",
+        "http.server",
+        "8000"
+      ],
+      "ready_exec": [
+        "python3",
+        "-c",
+        "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/').status)"
+      ],
+      "ready_expect": "200",
+      "smoke": [
+        "python3",
+        "-c",
+        "import json, ssl, socket; print('ok')"
+      ],
+      "smoke_expect": "ok",
+      "net": "none"
+    },
+    {
+      "name": "postgres",
+      "image": "docker.io/library/postgres:16-alpine",
+      "digest": "sha256:7a396fd264a2067788b6551122b50f162bf6136312c7fc9d74381cb92c648382",
+      "description": "Multi-process with shared memory. The hardest case.",
+      "args_override": [
+        "postgres",
+        "-D",
+        "/var/lib/postgresql/data",
+        "-c",
+        "listen_addresses=127.0.0.1"
+      ],
+      "user_override": {
+        "uid": 70,
+        "gid": 70
+      },
+      "prerun": {
+        "kind": "docker_initdb",
+        "env": [
+          "POSTGRES_PASSWORD=thesis",
+          "PGDATA=/var/lib/postgresql/data"
+        ],
+        "why": "The entrypoint runs initdb on first boot, so iteration 1 would differ from every later one. Initialising under Docker once and exporting that container keeps every measured run identical."
+      },
+      "ready_exec": [
+        "pg_isready",
+        "-h",
+        "127.0.0.1"
+      ],
+      "ready_expect": "accepting connections",
+      "smoke": [
+        "psql",
+        "-U",
+        "postgres",
+        "-h",
+        "127.0.0.1",
+        "-tAc",
+        "select 1"
+      ],
+      "smoke_expect": "1",
+      "net": "none"
+    }
+  ]
+}
