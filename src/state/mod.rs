@@ -1,14 +1,18 @@
 use crate::error::StateError;
 use crate::network::release_bridge_network;
 use anyhow::{Context, Result};
+use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_STATE_ROOT: &str = "/run/crun-rs";
 pub const STATE_SCHEMA_VERSION: u32 = 1;
+
+const STATE_LOCK_FILE: &str = "state.lock";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -259,26 +263,41 @@ fn load_from(root: &Path, id: &str) -> Result<ContainerState> {
 }
 
 fn load_current_from(root: &Path, id: &str) -> Result<ContainerState> {
+    let _guard = lock_state(root, id)?;
     let mut state = load_from(root, id)?;
-    refresh_liveness(root, &mut state)?;
+    if refresh_liveness(&mut state)? {
+        write_state_atomic(root, &state)?;
+    }
+
     Ok(state)
 }
 
 fn list_from(root: &Path) -> Result<Vec<ContainerState>> {
-    let mut states = list_raw_from(root)?;
-    for state in &mut states {
-        refresh_liveness(root, state)?;
+    let mut states = Vec::new();
+    for id in container_ids(root)? {
+        states.push(load_current_from(root, &id)?);
     }
+
     states.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(states)
 }
 
 fn list_raw_from(root: &Path) -> Result<Vec<ContainerState>> {
+    let mut states = Vec::new();
+    for id in container_ids(root)? {
+        states.push(load_from(root, &id)?);
+    }
+
+    states.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(states)
+}
+
+fn container_ids(root: &Path) -> Result<Vec<String>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
 
-    let mut states = Vec::new();
+    let mut ids = Vec::new();
     for entry in fs::read_dir(root)
         .with_context(|| format!("failed to read state root: {}", root.display()))?
     {
@@ -295,34 +314,30 @@ fn list_raw_from(root: &Path) -> Result<Vec<ContainerState>> {
         if !state_file(root, &id).exists() {
             continue;
         }
-        states.push(load_from(root, &id)?);
+        ids.push(id);
     }
 
-    states.sort_by(|left, right| left.id.cmp(&right.id));
-    Ok(states)
+    Ok(ids)
 }
 
-fn refresh_liveness(root: &Path, state: &mut ContainerState) -> Result<()> {
+/// Marks a running state as stopped when its process is gone.
+///
+/// Returns `true` when the state changed and has to be persisted. The caller
+/// owns the state lock, so this function never writes by itself.
+fn refresh_liveness(state: &mut ContainerState) -> Result<bool> {
     if state.status != ContainerStatus::Running {
-        return Ok(());
+        return Ok(false);
     }
 
-    let Some(pid) = state.pid else {
-        cleanup_stale_resources(state);
-        release_state_network_allocation(state);
-        state.mark_stopped(None, Some("STALE".to_string()))?;
-        save_to(root, state)?;
-        return Ok(());
-    };
-
-    if pid_is_alive(pid) {
-        return Ok(());
+    if state.pid.is_some_and(pid_is_alive) {
+        return Ok(false);
     }
 
     cleanup_stale_resources(state);
     release_state_network_allocation(state);
     state.mark_stopped(None, Some("STALE".to_string()))?;
-    save_to(root, state)
+
+    Ok(true)
 }
 
 fn cleanup_stale_resources(state: &ContainerState) {
@@ -376,14 +391,60 @@ pub fn pid_is_alive(pid: i32) -> bool {
 }
 
 fn save_to(root: &Path, state: &ContainerState) -> Result<()> {
+    let _guard = lock_state(root, &state.id)?;
+    write_state_atomic(root, state)
+}
+
+/// Takes the per-container state lock.
+///
+/// `flock` is tied to the open file description, so nesting two guards for the
+/// same container inside one process deadlocks. Every caller must hold at most
+/// one guard and write through [`write_state_atomic`] while holding it.
+fn lock_state(root: &Path, id: &str) -> Result<Flock<File>> {
+    validate_id(id)?;
+    let dir = container_dir(root, id);
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create state directory: {}", dir.display()))?;
+
+    let path = dir.join(STATE_LOCK_FILE);
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("failed to open state lock: {}", path.display()))?;
+
+    Flock::lock(file, FlockArg::LockExclusive).map_err(|(_, errno)| {
+        StateError::LockFailed {
+            id: id.to_string(),
+            errno: errno.to_string(),
+        }
+        .into()
+    })
+}
+
+/// Writes the state through a temporary file and renames it into place so a
+/// concurrent reader never observes a partially written file.
+fn write_state_atomic(root: &Path, state: &ContainerState) -> Result<()> {
     validate_id(&state.id)?;
     let dir = container_dir(root, &state.id);
     fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create state directory: {}", dir.display()))?;
 
-    let path = state_file(root, &state.id);
     let content = serde_json::to_string_pretty(state).context("failed to serialize state")?;
-    fs::write(&path, content).with_context(|| format!("failed to write state: {}", path.display()))
+    let temp_path = dir.join(format!("state.json.tmp.{}", std::process::id()));
+    let mut file = File::create(&temp_path)
+        .with_context(|| format!("failed to create temporary state: {}", temp_path.display()))?;
+    file.write_all(content.as_bytes())
+        .with_context(|| format!("failed to write temporary state: {}", temp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to flush temporary state: {}", temp_path.display()))?;
+    drop(file);
+
+    let path = state_file(root, &state.id);
+    fs::rename(&temp_path, &path)
+        .with_context(|| format!("failed to replace state: {}", path.display()))
 }
 
 fn delete_from(root: &Path, id: &str) -> Result<()> {
@@ -440,6 +501,74 @@ fn unix_timestamp() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stopped_state(id: &str) -> ContainerState {
+        let mut state = ContainerState::created(
+            id,
+            Path::new("/tmp/bundle"),
+            RuntimeMetadata {
+                network_mode: "none",
+                security_profile: "default",
+                log_mode: "off",
+                userns_mode: "host",
+                rootfs_mode: "direct",
+                policy_profile: "none",
+                tty: false,
+            },
+        )
+        .expect("state should be valid");
+        state
+            .mark_stopped(Some(0), None)
+            .expect("state should stop");
+        state
+    }
+
+    #[test]
+    fn leaves_no_temporary_file_after_saving_state() {
+        let root = std::env::temp_dir().join(format!("crun-rs-atomic-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let state = stopped_state("atomic");
+
+        save_to(&root, &state).expect("state should save");
+
+        let leftovers = fs::read_dir(container_dir(&root, "atomic"))
+            .expect("state directory should exist")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("state.json.tmp")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+        assert!(load_from(&root, "atomic").is_ok());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrent_writers_keep_state_readable() {
+        let root = std::env::temp_dir().join(format!("crun-rs-lock-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        save_to(&root, &stopped_state("shared")).expect("state should save");
+
+        std::thread::scope(|scope| {
+            for worker in 0..8 {
+                let root = root.clone();
+                scope.spawn(move || {
+                    for round in 0..50 {
+                        let mut state = stopped_state("shared");
+                        state.exit_code = Some(worker * 100 + round);
+                        save_to(&root, &state).expect("concurrent save should succeed");
+                        load_from(&root, "shared").expect("state must stay parseable");
+                    }
+                });
+            }
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn rejects_invalid_container_ids() {

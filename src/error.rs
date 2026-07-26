@@ -172,6 +172,9 @@ pub enum StateError {
 
     #[error("container {id} is running; stop it before delete")]
     ContainerIsRunning { id: String },
+
+    #[error("failed to lock state for container {id}: {errno}")]
+    LockFailed { id: String, errno: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
