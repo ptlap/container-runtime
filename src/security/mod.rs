@@ -1,4 +1,5 @@
-use crate::error::SecurityError;
+use crate::seccomp::arch::{self, AUDIT_ARCH_NATIVE};
+use crate::seccomp::bpf::{FilterBuilder, Program};
 use anyhow::{Context, Result};
 use nix::errno::Errno;
 use nix::libc;
@@ -7,17 +8,6 @@ use serde::{Deserialize, Serialize};
 
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const CAPABILITY_U32S: usize = 2;
-const SECCOMP_DATA_NR_OFFSET: u32 = 0;
-const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
-
-#[cfg(target_arch = "x86_64")]
-const AUDIT_ARCH_LOCAL: u32 = 0xc000003e;
-
-#[cfg(target_arch = "aarch64")]
-const AUDIT_ARCH_LOCAL: u32 = 0xc00000b7;
-
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-const AUDIT_ARCH_LOCAL: u32 = 0;
 
 #[repr(C)]
 struct CapUserHeader {
@@ -90,74 +80,26 @@ fn empty_capability_data() -> [CapUserData; CAPABILITY_U32S] {
 }
 
 fn install_seccomp_filter() -> Result<()> {
-    if AUDIT_ARCH_LOCAL == 0 {
-        return Err(SecurityError::UnsupportedArchitecture.into());
-    }
-
-    let mut filter = seccomp_denylist_filter();
-    let mut program = libc::sock_fprog {
-        len: filter
-            .len()
-            .try_into()
-            .context("seccomp filter has too many instructions")?,
-        filter: filter.as_mut_ptr(),
-    };
-
-    let result = unsafe {
-        libc::prctl(
-            libc::PR_SET_SECCOMP,
-            libc::SECCOMP_MODE_FILTER,
-            &mut program as *mut libc::sock_fprog,
-        )
-    };
-
-    Errno::result(result)
-        .map(drop)
-        .context("prctl seccomp failed")
+    seccomp_denylist_filter()?.install(0)
 }
 
-fn seccomp_denylist_filter() -> Vec<libc::sock_filter> {
-    let mut filter = vec![
-        // 1. Kiểm tra kiến trúc
-        bpf_stmt(
-            libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
-            SECCOMP_DATA_ARCH_OFFSET,
-        ),
-        bpf_jump(
-            libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
-            AUDIT_ARCH_LOCAL,
-            1,
-            0,
-        ),
-        bpf_stmt(
-            libc::BPF_RET | libc::BPF_K,
-            libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
-        ),
-        // 2. Load số hiệu syscall
-        bpf_stmt(
-            libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
-            SECCOMP_DATA_NR_OFFSET,
-        ),
-    ];
+/// Denies a fixed set of host-impacting syscalls and lets everything else
+/// through. This is the historical `--security default` behaviour; the
+/// generated allowlists live in [`crate::seccomp`].
+fn seccomp_denylist_filter() -> Result<Program> {
+    arch::ensure_supported()?;
+
+    let deny = libc::SECCOMP_RET_ERRNO | libc::EPERM as u32;
+    let mut builder = FilterBuilder::new()
+        .load_arch()
+        .jne_then_ret(AUDIT_ARCH_NATIVE, deny)
+        .load_syscall_nr();
 
     for syscall in denied_syscalls() {
-        filter.push(bpf_jump(
-            libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K,
-            *syscall as u32,
-            0,
-            1,
-        ));
-        filter.push(bpf_stmt(
-            libc::BPF_RET | libc::BPF_K,
-            libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
-        ));
+        builder = builder.jeq_then_ret(*syscall as u32, deny);
     }
 
-    filter.push(bpf_stmt(
-        libc::BPF_RET | libc::BPF_K,
-        libc::SECCOMP_RET_ALLOW,
-    ));
-    filter
+    Ok(builder.ret(libc::SECCOMP_RET_ALLOW).build()?)
 }
 
 fn denied_syscalls() -> &'static [libc::c_long] {
@@ -179,24 +121,6 @@ fn denied_syscalls() -> &'static [libc::c_long] {
         libc::SYS_unshare,
         libc::SYS_setns,
     ]
-}
-
-fn bpf_stmt(code: u32, k: u32) -> libc::sock_filter {
-    libc::sock_filter {
-        code: code as u16,
-        jt: 0,
-        jf: 0,
-        k,
-    }
-}
-
-fn bpf_jump(code: u32, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
-    libc::sock_filter {
-        code: code as u16,
-        jt,
-        jf,
-        k,
-    }
 }
 
 #[cfg(test)]
@@ -221,11 +145,12 @@ mod tests {
 
     #[test]
     fn seccomp_filter_denies_expected_syscalls_and_allows_rest() {
-        let filter = seccomp_denylist_filter();
+        let program = seccomp_denylist_filter().expect("denylist should build");
+        let filter = program.as_slice();
 
         assert_eq!(
             filter.first().map(|item| item.k),
-            Some(SECCOMP_DATA_ARCH_OFFSET)
+            Some(crate::seccomp::bpf::SECCOMP_DATA_ARCH_OFFSET)
         );
         assert_eq!(
             filter.last().map(|item| item.k),
@@ -235,5 +160,32 @@ mod tests {
             .windows(2)
             .any(|items| items[0].k == libc::SYS_mount as u32
                 && items[1].k == (libc::SECCOMP_RET_ERRNO | libc::EPERM as u32)));
+    }
+
+    #[test]
+    fn denylist_rejects_foreign_architectures_before_reading_the_syscall() {
+        let program = seccomp_denylist_filter().expect("denylist should build");
+        let filter = program.as_slice();
+
+        assert_eq!(filter[1].k, AUDIT_ARCH_NATIVE);
+        assert_eq!(filter[1].jt, 1, "a native arch must skip the reject");
+        assert_eq!(
+            filter[2].k,
+            libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
+            "a foreign arch must be rejected"
+        );
+    }
+
+    #[test]
+    fn denylist_covers_every_denied_syscall() {
+        let program = seccomp_denylist_filter().expect("denylist should build");
+        let filter = program.as_slice();
+
+        for syscall in denied_syscalls() {
+            assert!(
+                filter.iter().any(|item| item.k == *syscall as u32),
+                "syscall {syscall} is missing from the denylist filter"
+            );
+        }
     }
 }

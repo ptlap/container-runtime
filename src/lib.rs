@@ -18,6 +18,7 @@ pub mod namespace;
 pub mod network;
 pub mod policy;
 pub mod rootfs_diff;
+pub mod seccomp;
 pub mod security;
 pub mod selfexec;
 pub mod signal;

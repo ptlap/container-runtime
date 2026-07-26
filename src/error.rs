@@ -238,6 +238,24 @@ pub enum FilesystemError {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum SeccompError {
+    #[error("seccomp filter must not be empty")]
+    EmptyProgram,
+
+    #[error("seccomp filter has {length} instructions, limit is {limit}")]
+    ProgramTooLong { length: usize, limit: usize },
+
+    #[error("seccomp filter must end in a return instruction")]
+    ProgramDoesNotEndInReturn,
+
+    #[error("seccomp filter jump at {index} targets {target}, past the end of the program")]
+    JumpOutOfRange { index: usize, target: usize },
+
+    #[error("seccomp is not supported on this architecture")]
+    UnsupportedArchitecture,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum SignalError {
     #[error("signal number must be positive: {value}")]
     NonPositiveSignal { value: String },
