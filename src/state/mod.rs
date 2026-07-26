@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 pub const DEFAULT_STATE_ROOT: &str = "/run/crun-rs";
-pub const STATE_SCHEMA_VERSION: u32 = 1;
+pub const STATE_SCHEMA_VERSION: u32 = 2;
 
 const STATE_LOCK_FILE: &str = "state.lock";
 
@@ -48,6 +48,12 @@ pub struct ContainerState {
     pub rootfs_mode: String,
     #[serde(default = "default_policy_profile")]
     pub policy_profile: String,
+    #[serde(default = "default_seccomp_mode")]
+    pub seccomp_mode: String,
+    #[serde(default)]
+    pub seccomp_profile: Option<String>,
+    #[serde(default)]
+    pub seccomp_action: Option<String>,
     #[serde(default)]
     pub tty: bool,
     #[serde(default)]
@@ -83,6 +89,9 @@ pub struct RuntimeMetadata<'a> {
     pub rootfs_mode: &'a str,
     pub policy_profile: &'a str,
     pub tty: bool,
+    pub seccomp_mode: &'a str,
+    pub seccomp_profile: Option<&'a str>,
+    pub seccomp_action: Option<&'a str>,
 }
 
 impl ContainerState {
@@ -105,6 +114,9 @@ impl ContainerState {
             userns_mode: metadata.userns_mode.to_string(),
             rootfs_mode: metadata.rootfs_mode.to_string(),
             policy_profile: metadata.policy_profile.to_string(),
+            seccomp_mode: metadata.seccomp_mode.to_string(),
+            seccomp_profile: metadata.seccomp_profile.map(str::to_string),
+            seccomp_action: metadata.seccomp_action.map(str::to_string),
             tty: metadata.tty,
             health: None,
             created_at_unix: now,
@@ -139,6 +151,9 @@ impl ContainerState {
             userns_mode: metadata.userns_mode.to_string(),
             rootfs_mode: metadata.rootfs_mode.to_string(),
             policy_profile: metadata.policy_profile.to_string(),
+            seccomp_mode: metadata.seccomp_mode.to_string(),
+            seccomp_profile: metadata.seccomp_profile.map(str::to_string),
+            seccomp_action: metadata.seccomp_action.map(str::to_string),
             tty: metadata.tty,
             health: None,
             created_at_unix: now,
@@ -186,8 +201,10 @@ impl ContainerState {
     }
 }
 
+/// State files written before the seccomp fields existed carry no version, so
+/// they are read as version 1 rather than claiming to be current.
 fn default_schema_version() -> u32 {
-    STATE_SCHEMA_VERSION
+    1
 }
 
 fn default_network_mode() -> String {
@@ -212,6 +229,10 @@ fn default_rootfs_mode() -> String {
 
 fn default_policy_profile() -> String {
     "none".to_string()
+}
+
+fn default_seccomp_mode() -> String {
+    "off".to_string()
 }
 
 pub fn load(id: &str) -> Result<ContainerState> {
@@ -251,6 +272,12 @@ pub fn log_path(id: &str) -> Result<PathBuf> {
 pub fn runtime_log_path(id: &str) -> Result<PathBuf> {
     validate_id(id)?;
     Ok(runtime_log_file(id))
+}
+
+/// Where learn mode writes the syscalls a container made.
+pub fn capture_path(id: &str) -> Result<PathBuf> {
+    validate_id(id)?;
+    Ok(capture_file(id))
 }
 
 fn load_from(root: &Path, id: &str) -> Result<ContainerState> {
@@ -477,6 +504,10 @@ fn runtime_log_file(id: &str) -> PathBuf {
     container_dir(Path::new(DEFAULT_STATE_ROOT), id).join("runtime.log")
 }
 
+fn capture_file(id: &str) -> PathBuf {
+    container_dir(Path::new(DEFAULT_STATE_ROOT), id).join("syscalls.json")
+}
+
 pub(crate) fn validate_id(id: &str) -> std::result::Result<(), StateError> {
     if id.is_empty() {
         return Err(StateError::EmptyContainerId);
@@ -515,6 +546,9 @@ mod tests {
                 rootfs_mode: "direct",
                 policy_profile: "none",
                 tty: false,
+                seccomp_mode: "off",
+                seccomp_profile: None,
+                seccomp_action: None,
             },
         )
         .expect("state should be valid");
@@ -601,6 +635,9 @@ mod tests {
             rootfs_mode: "overlay",
             policy_profile: "restricted",
             tty: false,
+            seccomp_mode: "off",
+            seccomp_profile: None,
+            seccomp_action: None,
         };
 
         let mut state = ContainerState::running(
@@ -685,6 +722,9 @@ mod tests {
                 rootfs_mode: "direct",
                 policy_profile: "none",
                 tty: false,
+                seccomp_mode: "off",
+                seccomp_profile: None,
+                seccomp_action: None,
             },
         )
         .expect("created state should be valid");
@@ -725,6 +765,9 @@ mod tests {
                 rootfs_mode: "direct",
                 policy_profile: "none",
                 tty: false,
+                seccomp_mode: "off",
+                seccomp_profile: None,
+                seccomp_action: None,
             },
         )
         .expect("beta state should be valid");
@@ -739,6 +782,9 @@ mod tests {
                 rootfs_mode: "direct",
                 policy_profile: "none",
                 tty: false,
+                seccomp_mode: "off",
+                seccomp_profile: None,
+                seccomp_action: None,
             },
         )
         .expect("alpha state should be valid");
@@ -780,6 +826,9 @@ mod tests {
             rootfs_mode: "direct",
             policy_profile: "none",
             tty: false,
+            seccomp_mode: "off",
+            seccomp_profile: None,
+            seccomp_action: None,
         };
 
         let state = ContainerState::running(
@@ -826,11 +875,24 @@ mod tests {
         let state: ContainerState =
             serde_json::from_str(content).expect("legacy state should deserialize");
 
-        assert_eq!(state.schema_version, STATE_SCHEMA_VERSION);
+        // A file written before the seccomp fields existed reports itself as
+        // version 1 rather than claiming to be current.
+        assert_eq!(state.schema_version, 1);
         assert_eq!(state.id, "legacy");
         assert_eq!(state.status, ContainerStatus::Created);
         assert_eq!(state.userns_mode, "host");
         assert_eq!(state.rootfs_mode, "direct");
         assert_eq!(state.health, None);
+        assert_eq!(state.seccomp_mode, "off");
+        assert_eq!(state.seccomp_profile, None);
+        assert_eq!(state.seccomp_action, None);
+    }
+
+    #[test]
+    fn new_state_carries_the_current_schema_version() {
+        let state = stopped_state("versioned");
+
+        assert_eq!(state.schema_version, STATE_SCHEMA_VERSION);
+        assert_eq!(STATE_SCHEMA_VERSION, 2);
     }
 }

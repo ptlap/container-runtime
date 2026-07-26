@@ -2,6 +2,7 @@ use crate::cgroup::CgroupConfig;
 use crate::error::ContainerError;
 use crate::filesystem::OverlayConfig;
 use crate::network::NetworkMode;
+use crate::seccomp::{Program, SeccompMode};
 use crate::security::SecurityProfile;
 use crate::spec::config::{LinuxRlimit, Mount, ProcessUser};
 use crate::userns::UserNamespaceMode;
@@ -14,6 +15,8 @@ pub struct ProcessExit {
     pub code: Option<i32>,
     pub signal: Option<String>,
     pub error: Option<String>,
+    /// Syscalls observed while learning. Only set in learn mode.
+    pub capture: Option<crate::seccomp::capture::Capture>,
 }
 
 pub struct ProcessConfig<'a> {
@@ -37,6 +40,11 @@ pub struct ProcessConfig<'a> {
     pub security_profile: SecurityProfile,
     pub userns_mode: UserNamespaceMode,
     pub tty: bool,
+    pub seccomp_mode: SeccompMode,
+    /// Compiled in the parent before fork: the child cannot read the profile
+    /// once it is inside the new rootfs.
+    pub seccomp_program: Option<&'a Program>,
+    pub seccomp_flags: u64,
 }
 
 impl<'a> ProcessConfig<'a> {
@@ -66,6 +74,9 @@ pub struct ProcessConfigBuilder<'a> {
     security_profile: Option<SecurityProfile>,
     userns_mode: Option<UserNamespaceMode>,
     tty: bool,
+    seccomp_mode: SeccompMode,
+    seccomp_program: Option<&'a Program>,
+    seccomp_flags: u64,
 }
 
 impl Default for ProcessConfigBuilder<'_> {
@@ -91,6 +102,9 @@ impl Default for ProcessConfigBuilder<'_> {
             security_profile: None,
             userns_mode: None,
             tty: false,
+            seccomp_mode: SeccompMode::Off,
+            seccomp_program: None,
+            seccomp_flags: 0,
         }
     }
 }
@@ -196,6 +210,21 @@ impl<'a> ProcessConfigBuilder<'a> {
         self
     }
 
+    pub fn seccomp_mode(mut self, seccomp_mode: SeccompMode) -> Self {
+        self.seccomp_mode = seccomp_mode;
+        self
+    }
+
+    pub fn seccomp_program(mut self, seccomp_program: Option<&'a Program>) -> Self {
+        self.seccomp_program = seccomp_program;
+        self
+    }
+
+    pub fn seccomp_flags(mut self, seccomp_flags: u64) -> Self {
+        self.seccomp_flags = seccomp_flags;
+        self
+    }
+
     pub fn build(self) -> std::result::Result<ProcessConfig<'a>, ContainerError> {
         let args = self
             .args
@@ -229,6 +258,9 @@ impl<'a> ProcessConfigBuilder<'a> {
             security_profile: self.security_profile.unwrap_or(SecurityProfile::Default),
             userns_mode: self.userns_mode.unwrap_or(UserNamespaceMode::Host),
             tty: self.tty,
+            seccomp_mode: self.seccomp_mode,
+            seccomp_program: self.seccomp_program,
+            seccomp_flags: self.seccomp_flags,
         })
     }
 }

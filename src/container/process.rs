@@ -1,5 +1,5 @@
 use super::builder::{ProcessConfig, ProcessExit, StartedProcess};
-use super::log_helper::{redirect_stdio_to_log, start_log_helper, wait_for_log_helper};
+use super::log_helper::{redirect_stdio_to_log, start_log_helper, wait_for_log_helper_status};
 use super::pty;
 use crate::cgroup::Cgroup;
 use crate::error::ContainerError;
@@ -8,6 +8,8 @@ use crate::network::{
     allocate_bridge_network, cleanup_nat, cleanup_veth_host, release_bridge_network,
     setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NetworkMode,
 };
+use crate::seccomp::collector::{self, CollectorOptions};
+use crate::seccomp::{Program, SeccompMode, SeccompPlan};
 use crate::security::{self, SecurityProfile};
 use crate::spec::config::{rlimit_resource, LinuxRlimit, Mount, ProcessUser};
 use crate::userns::{write_uid_gid_maps, UserNamespaceMode};
@@ -42,9 +44,26 @@ struct ChildConfig<'a> {
     userns_mode: UserNamespaceMode,
     child_flags: CloneFlags,
     is_rootless: bool,
+    seccomp_mode: SeccompMode,
+    seccomp_program: Option<&'a Program>,
+    seccomp_flags: u64,
 }
 
 impl<'a> ChildConfig<'a> {
+    /// What the child installs just before exec.
+    fn seccomp_plan(&self) -> SeccompPlan<'a> {
+        match self.seccomp_mode {
+            SeccompMode::Off => SeccompPlan::None,
+            SeccompMode::Learn => SeccompPlan::Learn,
+            SeccompMode::Enforce => match self.seccomp_program {
+                Some(program) => SeccompPlan::Enforce {
+                    program,
+                    flags: self.seccomp_flags,
+                },
+                None => SeccompPlan::None,
+            },
+        }
+    }
     fn builder() -> ChildConfigBuilder<'a> {
         ChildConfigBuilder::default()
     }
@@ -68,6 +87,9 @@ struct ChildConfigBuilder<'a> {
     userns_mode: Option<UserNamespaceMode>,
     child_flags: CloneFlags,
     is_rootless: bool,
+    seccomp_mode: SeccompMode,
+    seccomp_program: Option<&'a Program>,
+    seccomp_flags: u64,
 }
 
 impl Default for ChildConfigBuilder<'_> {
@@ -90,6 +112,9 @@ impl Default for ChildConfigBuilder<'_> {
             userns_mode: None,
             child_flags: CloneFlags::empty(),
             is_rootless: false,
+            seccomp_mode: SeccompMode::Off,
+            seccomp_program: None,
+            seccomp_flags: 0,
         }
     }
 }
@@ -180,6 +205,13 @@ impl<'a> ChildConfigBuilder<'a> {
         self
     }
 
+    fn seccomp(mut self, mode: SeccompMode, program: Option<&'a Program>, flags: u64) -> Self {
+        self.seccomp_mode = mode;
+        self.seccomp_program = program;
+        self.seccomp_flags = flags;
+        self
+    }
+
     fn build(self) -> std::result::Result<ChildConfig<'a>, ContainerError> {
         Ok(ChildConfig {
             args: self
@@ -203,6 +235,9 @@ impl<'a> ChildConfigBuilder<'a> {
             userns_mode: self.userns_mode.unwrap_or(UserNamespaceMode::Host),
             child_flags: self.child_flags,
             is_rootless: self.is_rootless,
+            seccomp_mode: self.seccomp_mode,
+            seccomp_program: self.seccomp_program,
+            seccomp_flags: self.seccomp_flags,
         })
     }
 }
@@ -393,6 +428,11 @@ pub fn run_process(
                 .userns_mode(config.userns_mode)
                 .child_flags(child_flags)
                 .rootless(!is_root)
+                .seccomp(
+                    config.seccomp_mode,
+                    config.seccomp_program,
+                    config.seccomp_flags,
+                )
                 .build()?;
 
             if let Err(error) = run_child(
@@ -480,16 +520,54 @@ pub fn run_process(
             }
             close(userns_mapped_write_fd).ok();
 
-            let status = waitpid(child, None).context("failed to wait for child process")?;
+            // In learn mode the tracer owns waitpid(-1), so it also reaps the
+            // log helper and the pty proxy; their statuses come back here
+            // instead of being lost.
+            let (status, capture, reaped_others) = if config.seccomp_mode == SeccompMode::Learn {
+                let mut exclude_pids = Vec::new();
+                if let Some(pid) = log_helper {
+                    exclude_pids.push(pid);
+                }
+                if let Some(proxy) = proxy_handles.as_ref() {
+                    exclude_pids.push(proxy.pid());
+                }
+
+                let outcome = collector::run(CollectorOptions {
+                    root_pid: child,
+                    exclude_pids,
+                    max_events: None,
+                })
+                .context("failed to collect container syscalls")?;
+
+                (
+                    outcome.root_status,
+                    Some(outcome.capture),
+                    outcome.reaped_others,
+                )
+            } else {
+                let status = waitpid(child, None).context("failed to wait for child process")?;
+                (status, None, Vec::new())
+            };
+
+            let reaped_status = |target: Option<nix::unistd::Pid>| {
+                target.and_then(|pid| {
+                    reaped_others
+                        .iter()
+                        .find(|(reaped, _)| *reaped == pid)
+                        .map(|(_, status)| *status)
+                })
+            };
+
             if config.tty {
                 pty::unregister_sigwinch();
                 if let Some(proxy) = proxy_handles.take() {
-                    proxy.join();
+                    let already_reaped = reaped_status(Some(proxy.pid())).is_some();
+                    proxy.join_unless_reaped(already_reaped);
                 }
                 drop(_raw_guard);
             }
             let child_error = read_child_error(error_read_fd)?;
-            wait_for_log_helper(log_helper)?;
+            wait_for_log_helper_status(log_helper, reaped_status(log_helper))?;
 
             match status {
                 WaitStatus::Exited(_, code) => {
@@ -515,18 +593,21 @@ pub fn run_process(
                     code: Some(code),
                     signal: None,
                     error: child_error,
+                    capture,
                 },
                 WaitStatus::Signaled(_, signal, _) => ProcessExit {
                     pid: child_pid,
                     code: None,
                     signal: Some(format!("{signal:?}")),
                     error: child_error,
+                    capture,
                 },
                 other => ProcessExit {
                     pid: child_pid,
                     code: None,
                     signal: Some(format!("{other:?}")),
                     error: child_error,
+                    capture,
                 },
             }
         }
@@ -649,7 +730,7 @@ fn run_child(
     apply_rlimits(config.rlimits)?;
     apply_process_user(config.process_user)?;
 
-    security::apply(config.security_profile)?;
+    security::apply(config.security_profile, config.seccomp_plan())?;
 
     super::env::replace_environment(config.env)?;
 

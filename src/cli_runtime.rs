@@ -2,12 +2,18 @@ use crate::audit_log::{self, AuditEvent as RuntimeEvent};
 use crate::cgroup::read_container_stats;
 use crate::checkpoint::{self, CheckpointOptions, RestoreOptions};
 use crate::doctor;
+use crate::error::SeccompError;
 use crate::health::{self, HealthResult};
 use crate::image;
 use crate::inspect_security;
 use crate::lifecycle;
 use crate::modes::LogMode;
 use crate::rootfs_diff;
+use crate::seccomp::capture::CaptureFile;
+use crate::seccomp::profile::SeccompProfile;
+use crate::seccomp::{
+    compile, generate, report, syscalls, CompileOptions, SeccompAction, SyscallOrder,
+};
 use crate::state;
 use crate::trace::{ProcessNode, TraceOptions, TraceReport};
 use anyhow::{bail, Context, Result};
@@ -539,6 +545,192 @@ pub fn trace_container(id: &str, json: bool, strace: bool, duration_ms: u64) -> 
         },
     )?;
     print_trace_report(&report, json)
+}
+
+/// Inputs for `crun seccomp generate`.
+#[derive(Debug, Clone)]
+pub struct SeccompGenerateRequest<'a> {
+    pub capture_paths: &'a [PathBuf],
+    pub container_ids: &'a [String],
+    pub output: &'a Path,
+    pub workload: Option<&'a str>,
+    pub action: SeccompAction,
+    pub include_compat: bool,
+    pub merge_into: Option<&'a Path>,
+    pub json: bool,
+}
+
+pub fn seccomp_generate(request: SeccompGenerateRequest<'_>) -> Result<()> {
+    let SeccompGenerateRequest {
+        capture_paths,
+        container_ids,
+        output,
+        workload,
+        action,
+        include_compat,
+        merge_into,
+        json,
+    } = request;
+
+    let mut captures = Vec::new();
+    for id in container_ids {
+        captures.push(CaptureFile::load(&state::capture_path(id)?)?);
+    }
+    for path in capture_paths {
+        captures.push(CaptureFile::load(path)?);
+    }
+
+    if captures.is_empty() {
+        return Err(SeccompError::NoCaptures.into());
+    }
+
+    let merge_into = merge_into.map(SeccompProfile::load).transpose()?;
+    let profile = generate::generate(
+        &captures,
+        generate::GenerateOptions {
+            workload: workload.map(str::to_string),
+            action,
+            include_compat,
+            merge_into,
+        },
+    )?;
+    profile.save(output)?;
+
+    let report = report::inspect(output, &profile)?;
+    print_profile_inspection(&report, json)
+}
+
+pub fn seccomp_inspect(path: &Path, json: bool) -> Result<()> {
+    let profile = SeccompProfile::load(path)?;
+    let report = report::inspect(path, &profile)?;
+    print_profile_inspection(&report, json)
+}
+
+pub fn seccomp_compare(
+    path: &Path,
+    baseline: Option<&Path>,
+    cve_map: Option<&Path>,
+    json: bool,
+) -> Result<()> {
+    let profile = SeccompProfile::load(path)?;
+    let baseline_profile = baseline.map(SeccompProfile::load).transpose()?;
+    let cve_map = cve_map.map(report::CveMap::load).transpose()?;
+
+    let report = report::compare(
+        path,
+        &profile,
+        baseline.zip(baseline_profile.as_ref()),
+        cve_map.as_ref(),
+    );
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("profile: {}", report.profile);
+    if let Some(baseline) = &report.baseline {
+        println!("baseline: {baseline}");
+    }
+    println!("arch: {}", report.arch);
+    println!("syscalls_on_arch: {}", report.universe_count);
+    println!("profile_allowed: {}", report.profile_allowed);
+    if let Some(count) = report.baseline_allowed {
+        println!("baseline_allowed: {count}");
+    }
+    if let Some(reduction) = report.reduction_vs_baseline {
+        println!("reduction_vs_baseline: {:.4}", reduction);
+    }
+    println!("reduction_vs_arch: {:.4}", report.reduction_vs_universe);
+    println!("newly_blocked: {}", report.newly_blocked.len());
+    println!("over_allowed: {}", report.over_allowed.len());
+
+    if let Some(cve) = &report.cve {
+        println!("cve_total: {}", cve.total);
+        println!("cve_container_relevant: {}", cve.container_relevant);
+        println!("cve_blocked_by_profile: {}", cve.mitigated_by_profile);
+        println!("cve_blocked_by_baseline: {}", cve.mitigated_by_baseline);
+        println!("cve_newly_blocked: {}", cve.newly_mitigated.len());
+    }
+
+    Ok(())
+}
+
+pub fn seccomp_compile(
+    path: &Path,
+    action: SeccompAction,
+    order: SyscallOrder,
+    json: bool,
+) -> Result<()> {
+    let profile = SeccompProfile::load(path)?;
+    let compiled = compile::compile(
+        &profile,
+        CompileOptions {
+            default_action: action,
+            order,
+        },
+    )?;
+
+    if json {
+        let report = serde_json::json!({
+            "profile": path.display().to_string(),
+            "default_action": action.as_str(),
+            "order": order.as_str(),
+            "allowed_count": compiled.allowed.len(),
+            "instruction_count": compiled.program.len(),
+            "unresolved": compiled.unresolved,
+            "allowed": compiled
+                .allowed
+                .iter()
+                .map(|number| syscalls::name(*number).unwrap_or("unknown"))
+                .collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("profile: {}", path.display());
+    println!("default_action: {}", action.as_str());
+    println!("order: {}", order.as_str());
+    println!("allowed_count: {}", compiled.allowed.len());
+    println!("instruction_count: {}", compiled.program.len());
+    for name in &compiled.unresolved {
+        println!("warning: unknown syscall for this architecture: {name}");
+    }
+
+    Ok(())
+}
+
+fn print_profile_inspection(report: &report::ProfileInspection, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(report)?);
+        return Ok(());
+    }
+
+    println!("profile: {}", report.path);
+    println!("arch: {}", report.arch);
+    println!("default_action: {}", report.default_action);
+    println!("allowed_count: {}", report.allowed_count);
+    println!("allowed_count_for_arch: {}", report.allowed_count_for_arch);
+    println!("instruction_count: {}", report.instruction_count);
+    if let Some(workload) = &report.workload {
+        println!("workload: {workload}");
+    }
+    if let Some(count) = report.observed_syscall_count {
+        println!("observed_syscalls: {count}");
+    }
+    if let Some(count) = report.baseline_syscall_count {
+        println!("baseline_syscalls: {count}");
+    }
+    if let Some(events) = report.total_events {
+        println!("captured_events: {events}");
+    }
+    println!("source_runs: {}", report.source_runs);
+    for name in &report.unknown_for_arch {
+        println!("warning: unknown syscall for this architecture: {name}");
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

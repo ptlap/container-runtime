@@ -103,8 +103,20 @@ pub struct PtyProxy {
 }
 
 impl PtyProxy {
+    pub fn pid(&self) -> nix::unistd::Pid {
+        self.pid
+    }
+
     pub fn join(self) {
         let _ = nix::sys::wait::waitpid(self.pid, None);
+    }
+
+    /// Skips the wait when the proxy was already reaped, which happens when the
+    /// seccomp tracer owns `waitpid(-1)` for the whole run.
+    pub fn join_unless_reaped(self, reaped: bool) {
+        if !reaped {
+            self.join();
+        }
     }
 }
 

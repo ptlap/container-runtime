@@ -9,6 +9,7 @@ use container_runtime::modes::{
 };
 use container_runtime::network::NetworkMode;
 use container_runtime::policy;
+use container_runtime::seccomp::{self, SeccompAction, SeccompMode, SeccompOptions, SyscallOrder};
 use container_runtime::security::SecurityProfile;
 use container_runtime::selfexec::{
     current_exe_link, ensure_reexecuted_from_memfd, is_running_from_memfd,
@@ -50,6 +51,18 @@ enum Command {
         log: CliLogMode,
         #[arg(long, value_enum, default_value_t = CliUsernsMode::Host)]
         userns: CliUsernsMode,
+        #[arg(long, value_enum, default_value_t = CliSeccompMode::Off)]
+        seccomp: CliSeccompMode,
+        #[arg(long)]
+        seccomp_profile: Option<PathBuf>,
+        #[arg(long)]
+        seccomp_out: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliSeccompAction::Errno)]
+        seccomp_action: CliSeccompAction,
+        #[arg(long, value_enum, default_value_t = CliSyscallOrder::ByFrequency)]
+        seccomp_order: CliSyscallOrder,
+        #[arg(long)]
+        seccomp_log: bool,
         #[arg(short, long)]
         tty: bool,
         id: String,
@@ -64,6 +77,18 @@ enum Command {
         log: CliLogMode,
         #[arg(long, value_enum, default_value_t = CliUsernsMode::Host)]
         userns: CliUsernsMode,
+        #[arg(long, value_enum, default_value_t = CliSeccompMode::Off)]
+        seccomp: CliSeccompMode,
+        #[arg(long)]
+        seccomp_profile: Option<PathBuf>,
+        #[arg(long)]
+        seccomp_out: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliSeccompAction::Errno)]
+        seccomp_action: CliSeccompAction,
+        #[arg(long, value_enum, default_value_t = CliSyscallOrder::ByFrequency)]
+        seccomp_order: CliSyscallOrder,
+        #[arg(long)]
+        seccomp_log: bool,
         #[arg(short, long)]
         tty: bool,
         name: String,
@@ -78,6 +103,18 @@ enum Command {
         log: CliLogMode,
         #[arg(long, value_enum, default_value_t = CliUsernsMode::Host)]
         userns: CliUsernsMode,
+        #[arg(long, value_enum, default_value_t = CliSeccompMode::Off)]
+        seccomp: CliSeccompMode,
+        #[arg(long)]
+        seccomp_profile: Option<PathBuf>,
+        #[arg(long)]
+        seccomp_out: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = CliSeccompAction::Errno)]
+        seccomp_action: CliSeccompAction,
+        #[arg(long, value_enum, default_value_t = CliSyscallOrder::ByFrequency)]
+        seccomp_order: CliSyscallOrder,
+        #[arg(long)]
+        seccomp_log: bool,
         #[arg(short, long)]
         tty: bool,
         id: String,
@@ -195,6 +232,10 @@ enum Command {
         #[command(subcommand)]
         command: ImageCommand,
     },
+    Seccomp {
+        #[command(subcommand)]
+        command: SeccompCommand,
+    },
     Debug {
         #[command(subcommand)]
         command: DebugCommand,
@@ -208,6 +249,55 @@ enum ImageCommand {
         name: String,
     },
     List {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SeccompCommand {
+    /// Build a profile from one or more syscall captures.
+    Generate {
+        #[arg(long = "container", value_name = "ID")]
+        containers: Vec<String>,
+        #[arg(long = "capture", value_name = "PATH")]
+        captures: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, value_enum, default_value_t = CliSeccompAction::Errno)]
+        action: CliSeccompAction,
+        #[arg(long)]
+        compat: bool,
+        #[arg(long, value_name = "PATH")]
+        merge: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show what a profile allows.
+    Inspect {
+        profile: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Measure a profile against a baseline and a CVE map.
+    Compare {
+        profile: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        baseline: Option<PathBuf>,
+        #[arg(long = "cve-map", value_name = "PATH")]
+        cve_map: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compile a profile to a filter without running anything.
+    Compile {
+        profile: PathBuf,
+        #[arg(long, value_enum, default_value_t = CliSeccompAction::Errno)]
+        action: CliSeccompAction,
+        #[arg(long, value_enum, default_value_t = CliSyscallOrder::ByFrequency)]
+        order: CliSyscallOrder,
         #[arg(long)]
         json: bool,
     },
@@ -242,6 +332,86 @@ enum CliLogMode {
 enum CliUsernsMode {
     Host,
     Private,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSeccompMode {
+    Off,
+    Learn,
+    Enforce,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSeccompAction {
+    Errno,
+    Enosys,
+    Kill,
+    Log,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSyscallOrder {
+    AsListed,
+    ByNumber,
+    ByFrequency,
+}
+
+impl From<CliSeccompMode> for SeccompMode {
+    fn from(value: CliSeccompMode) -> Self {
+        match value {
+            CliSeccompMode::Off => Self::Off,
+            CliSeccompMode::Learn => Self::Learn,
+            CliSeccompMode::Enforce => Self::Enforce,
+        }
+    }
+}
+
+impl From<CliSeccompAction> for SeccompAction {
+    fn from(value: CliSeccompAction) -> Self {
+        match value {
+            CliSeccompAction::Errno => Self::Errno,
+            CliSeccompAction::Enosys => Self::Enosys,
+            CliSeccompAction::Kill => Self::Kill,
+            CliSeccompAction::Log => Self::Log,
+        }
+    }
+}
+
+impl From<CliSyscallOrder> for SyscallOrder {
+    fn from(value: CliSyscallOrder) -> Self {
+        match value {
+            CliSyscallOrder::AsListed => Self::AsListed,
+            CliSyscallOrder::ByNumber => Self::ByNumber,
+            CliSyscallOrder::ByFrequency => Self::ByFrequency,
+        }
+    }
+}
+
+/// Flags that describe what the container should do about seccomp.
+#[derive(Debug, Clone)]
+struct SeccompArgs {
+    mode: CliSeccompMode,
+    profile: Option<PathBuf>,
+    out: Option<PathBuf>,
+    action: CliSeccompAction,
+    order: CliSyscallOrder,
+    log: bool,
+}
+
+impl SeccompArgs {
+    fn resolve(self, id: &str) -> Result<SeccompOptions> {
+        let default_capture = container_runtime::state::capture_path(id)?;
+        seccomp::resolve_options(
+            self.mode.into(),
+            self.profile,
+            self.out,
+            self.action.into(),
+            self.order.into(),
+            self.log,
+            &default_capture,
+        )
+        .map_err(Into::into)
+    }
 }
 
 impl From<CliNetworkMode> for NetworkMode {
@@ -282,6 +452,7 @@ struct RunOptions {
     log_mode: LogMode,
     userns_mode: UserNamespaceMode,
     tty: bool,
+    seccomp: SeccompOptions,
 }
 
 #[derive(Debug, Clone)]
@@ -293,6 +464,7 @@ struct RunImageOptions {
     log_mode: LogMode,
     userns_mode: UserNamespaceMode,
     tty: bool,
+    seccomp: SeccompOptions,
 }
 
 fn init_logging(log_level: &str, log_format: &str) -> Result<()> {
@@ -333,35 +505,71 @@ fn main() -> Result<()> {
             security,
             log,
             userns,
+            seccomp,
+            seccomp_profile,
+            seccomp_out,
+            seccomp_action,
+            seccomp_order,
+            seccomp_log,
             tty,
             id,
             bundle,
-        } => run_container(RunOptions {
-            id,
-            bundle,
-            network_mode: net.into(),
-            security_profile: security.into(),
-            log_mode: log.into(),
-            userns_mode: userns_mode_from_cli(userns)?,
-            tty,
-        })?,
+        } => {
+            let seccomp = SeccompArgs {
+                mode: seccomp,
+                profile: seccomp_profile,
+                out: seccomp_out,
+                action: seccomp_action,
+                order: seccomp_order,
+                log: seccomp_log,
+            }
+            .resolve(&id)?;
+            run_container(RunOptions {
+                id,
+                bundle,
+                network_mode: net.into(),
+                security_profile: security.into(),
+                log_mode: log.into(),
+                userns_mode: userns_mode_from_cli(userns)?,
+                tty,
+                seccomp,
+            })?
+        }
         Command::Create {
             net,
             security,
             log,
             userns,
+            seccomp,
+            seccomp_profile,
+            seccomp_out,
+            seccomp_action,
+            seccomp_order,
+            seccomp_log,
             tty,
             id,
             bundle,
-        } => create_container(RunOptions {
-            id,
-            bundle,
-            network_mode: net.into(),
-            security_profile: security.into(),
-            log_mode: log.into(),
-            userns_mode: userns_mode_from_cli(userns)?,
-            tty,
-        })?,
+        } => {
+            let seccomp = SeccompArgs {
+                mode: seccomp,
+                profile: seccomp_profile,
+                out: seccomp_out,
+                action: seccomp_action,
+                order: seccomp_order,
+                log: seccomp_log,
+            }
+            .resolve(&id)?;
+            create_container(RunOptions {
+                id,
+                bundle,
+                network_mode: net.into(),
+                security_profile: security.into(),
+                log_mode: log.into(),
+                userns_mode: userns_mode_from_cli(userns)?,
+                tty,
+                seccomp,
+            })?
+        }
         Command::Start { id } => start_container(&id)?,
         Command::State { id, json } => container_runtime::cli_runtime::show_state(&id, json)?,
         Command::Stats { id, json } => container_runtime::cli_runtime::show_stats(&id, json)?,
@@ -417,27 +625,97 @@ fn main() -> Result<()> {
             images_dir,
         } => container_runtime::cli_runtime::restore_container(&id, json, images_dir)?,
         Command::Image { command } => image_command(command)?,
+        Command::Seccomp { command } => seccomp_command(command)?,
         Command::RunImage {
             net,
             security,
             log,
             userns,
+            seccomp,
+            seccomp_profile,
+            seccomp_out,
+            seccomp_action,
+            seccomp_order,
+            seccomp_log,
             tty,
             name,
             id,
-        } => run_image(RunImageOptions {
-            name,
-            id,
-            network_mode: net.into(),
-            security_profile: security.into(),
-            log_mode: log.into(),
-            userns_mode: userns_mode_from_cli(userns)?,
-            tty,
-        })?,
+        } => {
+            let seccomp = SeccompArgs {
+                mode: seccomp,
+                profile: seccomp_profile,
+                out: seccomp_out,
+                action: seccomp_action,
+                order: seccomp_order,
+                log: seccomp_log,
+            }
+            .resolve(&id)?;
+            run_image(RunImageOptions {
+                name,
+                id,
+                network_mode: net.into(),
+                security_profile: security.into(),
+                log_mode: log.into(),
+                userns_mode: userns_mode_from_cli(userns)?,
+                tty,
+                seccomp,
+            })?
+        }
         Command::Debug { command } => debug_command(command)?,
     }
 
     Ok(())
+}
+
+fn seccomp_command(command: SeccompCommand) -> Result<()> {
+    match command {
+        SeccompCommand::Generate {
+            containers,
+            captures,
+            output,
+            name,
+            action,
+            compat,
+            merge,
+            json,
+        } => container_runtime::cli_runtime::seccomp_generate(
+            container_runtime::cli_runtime::SeccompGenerateRequest {
+                capture_paths: &captures,
+                container_ids: &containers,
+                output: &output,
+                workload: name.as_deref(),
+                action: action.into(),
+                include_compat: compat,
+                merge_into: merge.as_deref(),
+                json,
+            },
+        ),
+        SeccompCommand::Inspect { profile, json } => {
+            container_runtime::cli_runtime::seccomp_inspect(&profile, json)
+        }
+        SeccompCommand::Compare {
+            profile,
+            baseline,
+            cve_map,
+            json,
+        } => container_runtime::cli_runtime::seccomp_compare(
+            &profile,
+            baseline.as_deref(),
+            cve_map.as_deref(),
+            json,
+        ),
+        SeccompCommand::Compile {
+            profile,
+            action,
+            order,
+            json,
+        } => container_runtime::cli_runtime::seccomp_compile(
+            &profile,
+            action.into(),
+            order.into(),
+            json,
+        ),
+    }
 }
 
 fn image_command(command: ImageCommand) -> Result<()> {
@@ -459,6 +737,7 @@ fn run_image(options: RunImageOptions) -> Result<()> {
         log_mode: options.log_mode,
         userns_mode: options.userns_mode,
         tty: options.tty,
+        seccomp: options.seccomp,
     })
 }
 
@@ -488,6 +767,7 @@ fn create_container(options: RunOptions) -> Result<()> {
         log_mode: options.log_mode,
         userns_mode: options.userns_mode,
         tty: options.tty,
+        seccomp: options.seccomp.clone(),
     })?;
     println!("created container: {}", options.id);
 
@@ -497,6 +777,7 @@ fn create_container(options: RunOptions) -> Result<()> {
 fn start_container(id: &str) -> Result<()> {
     let state = lifecycle::load_created(id)?;
 
+    let seccomp = seccomp_options_from_state(&state)?;
     let options = RunOptions {
         id: state.id.clone(),
         bundle: PathBuf::from(&state.bundle),
@@ -505,6 +786,7 @@ fn start_container(id: &str) -> Result<()> {
         log_mode: parse_log_mode(&state.log_mode)?,
         userns_mode: parse_userns_mode(&state.userns_mode)?,
         tty: state.tty,
+        seccomp,
     };
 
     execute_container(options, Some(state))
@@ -541,6 +823,7 @@ fn execute_container(options: RunOptions, existing_state: Option<ContainerState>
         userns_mode: options.userns_mode,
         tty: options.tty,
         capture_logs,
+        seccomp: options.seccomp.clone(),
     };
 
     let report = lifecycle::run_container_process(run_options, existing_state)?;
@@ -550,6 +833,30 @@ fn execute_container(options: RunOptions, existing_state: Option<ContainerState>
     }
 
     exit_with_process_status(report.exit_code, report.exit_signal.as_deref());
+}
+
+/// Rebuilds the seccomp options recorded at create time so `crun start` runs
+/// the container the way `crun create` described it.
+fn seccomp_options_from_state(state: &ContainerState) -> Result<SeccompOptions> {
+    let mode = seccomp::parse_mode(&state.seccomp_mode)?;
+    let action = state
+        .seccomp_action
+        .as_deref()
+        .map(seccomp::parse_action)
+        .transpose()?
+        .unwrap_or(SeccompAction::Errno);
+    let default_capture = container_runtime::state::capture_path(&state.id)?;
+
+    seccomp::resolve_options(
+        mode,
+        state.seccomp_profile.as_deref().map(PathBuf::from),
+        None,
+        action,
+        SyscallOrder::ByFrequency,
+        false,
+        &default_capture,
+    )
+    .map_err(Into::into)
 }
 
 fn parse_userns_mode(value: &str) -> Result<UserNamespaceMode> {

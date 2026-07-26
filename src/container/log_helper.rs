@@ -88,11 +88,26 @@ fn pump_logs(read_fd: OwnedFd, log_path: PathBuf) -> Result<()> {
 }
 
 pub fn wait_for_log_helper(log_helper: Option<nix::unistd::Pid>) -> Result<()> {
+    wait_for_log_helper_status(log_helper, None)
+}
+
+/// Checks the log helper's exit status, waiting for it only when nobody else
+/// has. The seccomp tracer waits on every child of the runtime, so it reaps the
+/// log helper too and hands the status back here.
+pub fn wait_for_log_helper_status(
+    log_helper: Option<nix::unistd::Pid>,
+    already_reaped: Option<WaitStatus>,
+) -> Result<()> {
     let Some(log_helper) = log_helper else {
         return Ok(());
     };
 
-    match waitpid(log_helper, None).context("failed to wait for log helper")? {
+    let status = match already_reaped {
+        Some(status) => status,
+        None => waitpid(log_helper, None).context("failed to wait for log helper")?,
+    };
+
+    match status {
         WaitStatus::Exited(_, 0) => Ok(()),
         WaitStatus::Exited(_, code) => Err(ContainerError::LogHelperExited { code }.into()),
         WaitStatus::Signaled(_, signal, _) => Err(ContainerError::LogHelperKilled {

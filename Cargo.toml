@@ -20,6 +20,7 @@ nix = { version = "0.31", features = [
   "mount",
   "ptrace",
   "sched",
+  "signal",
   "user",
   "fs",
   "term",

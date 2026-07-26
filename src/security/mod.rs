@@ -1,9 +1,12 @@
 use crate::seccomp::arch::{self, AUDIT_ARCH_NATIVE};
 use crate::seccomp::bpf::{FilterBuilder, Program};
+use crate::seccomp::{self, SeccompPlan};
 use anyhow::{Context, Result};
 use nix::errno::Errno;
 use nix::libc;
 use nix::sys::prctl;
+use nix::sys::ptrace;
+use nix::sys::signal::{raise, Signal};
 use serde::{Deserialize, Serialize};
 
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
@@ -39,17 +42,41 @@ impl SecurityProfile {
     }
 }
 
-pub fn apply(profile: SecurityProfile) -> Result<()> {
-    match profile {
-        SecurityProfile::Default => {
-            prctl::set_no_new_privs()
-                .context("failed to enable no_new_privs for default security profile")?;
-            drop_capabilities()
-                .context("failed to drop capabilities for default security profile")?;
-            install_seccomp_filter()
-                .context("failed to install seccomp filter for default security profile")
+/// Applies the security profile and any seccomp plan, in the child, just before
+/// `execvp`.
+///
+/// Installing a seccomp filter needs `no_new_privs` or `CAP_SYS_ADMIN`, so it is
+/// enabled whenever a plan is active rather than only for the default profile;
+/// otherwise `--security unconfined --seccomp enforce` would depend on the
+/// runtime happening to run as root.
+pub fn apply(profile: SecurityProfile, plan: SeccompPlan<'_>) -> Result<()> {
+    if profile == SecurityProfile::Default || !plan.is_none() {
+        prctl::set_no_new_privs().context("failed to enable no_new_privs")?;
+    }
+
+    if profile == SecurityProfile::Default {
+        drop_capabilities().context("failed to drop capabilities for default security profile")?;
+        install_seccomp_filter()
+            .context("failed to install seccomp filter for default security profile")?;
+    }
+
+    match plan {
+        SeccompPlan::None => Ok(()),
+        SeccompPlan::Learn => {
+            // The tracer has to be attached and its options set before the
+            // trace filter goes in: a SECCOMP_RET_TRACE syscall with no tracer
+            // fails with ENOSYS, which would break the calls this function
+            // still has to make before exec.
+            ptrace::traceme().context("failed to enable tracing for seccomp learn mode")?;
+            raise(Signal::SIGSTOP).context("failed to stop for the seccomp tracer")?;
+
+            seccomp::learn_filter()?
+                .install(0)
+                .context("failed to install the seccomp trace filter")
         }
-        SecurityProfile::Unconfined => Ok(()),
+        SeccompPlan::Enforce { program, flags } => program
+            .install(flags)
+            .context("failed to install the seccomp allowlist"),
     }
 }
 

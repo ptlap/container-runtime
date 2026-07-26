@@ -15,6 +15,8 @@ use crate::modes::LogMode;
 use crate::namespace::effective_namespace_flags;
 use crate::network::NetworkMode;
 use crate::policy;
+use crate::seccomp::capture::CaptureFile;
+use crate::seccomp::{self, SeccompOptions};
 use crate::security::SecurityProfile;
 use crate::signal::{parse_signal, send_signal};
 use crate::spec::config::load_config;
@@ -32,6 +34,7 @@ pub struct ContainerRunOptions<'a> {
     pub userns_mode: UserNamespaceMode,
     pub tty: bool,
     pub capture_logs: bool,
+    pub seccomp: SeccompOptions,
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +51,7 @@ pub enum StopOutcome {
     StoppedViaSigkill,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CreateOptions<'a> {
     pub id: &'a str,
     pub bundle: &'a Path,
@@ -57,6 +60,7 @@ pub struct CreateOptions<'a> {
     pub log_mode: LogMode,
     pub userns_mode: UserNamespaceMode,
     pub tty: bool,
+    pub seccomp: SeccompOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +96,11 @@ pub fn create(options: CreateOptions<'_>) -> Result<ContainerState> {
         options.log_mode,
     )?;
     let rootfs_mode = resolve_rootfs(options.bundle, &config.root.path, config.crun.as_ref()).mode;
+    let seccomp_profile_path = options
+        .seccomp
+        .profile_path
+        .as_ref()
+        .map(|path| path.display().to_string());
 
     let state = ContainerState::created(
         options.id,
@@ -104,6 +113,9 @@ pub fn create(options: CreateOptions<'_>) -> Result<ContainerState> {
             rootfs_mode: rootfs_mode.as_str(),
             policy_profile: effective_policy.profile.as_str(),
             tty: options.tty,
+            seccomp_mode: options.seccomp.mode.as_str(),
+            seccomp_profile: seccomp_profile_path.as_deref(),
+            seccomp_action: Some(options.seccomp.action.as_str()),
         },
     )?;
     state::save(&state)?;
@@ -335,6 +347,17 @@ pub fn run_container_process(
         .map(|linux| linux.readonly_paths.as_slice())
         .unwrap_or(&[]);
 
+    // Compiled before fork: the child installs its filter after pivot_root,
+    // when the profile path on the host no longer resolves, and a broken
+    // profile should fail before any cgroup or veth is created.
+    let compiled_profile = seccomp::prepare(&options.seccomp)?;
+    let seccomp_profile_path = options
+        .seccomp
+        .profile_path
+        .as_ref()
+        .map(|path| path.display().to_string());
+    let seccomp_action = options.seccomp.action.as_str();
+
     let log_path = state::log_path(id)?;
     let mut running_state = None;
     let mut save_started_state = |started: StartedProcess| {
@@ -365,6 +388,9 @@ pub fn run_container_process(
                     rootfs_mode: rootfs.mode.as_str(),
                     policy_profile: policy_profile.as_str(),
                     tty: options.tty,
+                    seccomp_mode: options.seccomp.mode.as_str(),
+                    seccomp_profile: seccomp_profile_path.as_deref(),
+                    seccomp_action: Some(seccomp_action),
                 },
             )?
         };
@@ -395,9 +421,27 @@ pub fn run_container_process(
         .security_profile(security_profile)
         .userns_mode(userns_mode)
         .tty(options.tty)
+        .seccomp_mode(options.seccomp.mode)
+        .seccomp_program(compiled_profile.as_ref().map(|compiled| &compiled.program))
+        .seccomp_flags(options.seccomp.filter_flags())
         .build()?;
 
     let process_exit = run_process(process_config, &mut save_started_state)?;
+
+    if let Some(capture) = process_exit.capture.as_ref() {
+        let path = options
+            .seccomp
+            .capture_path
+            .clone()
+            .unwrap_or(state::capture_path(id)?);
+        let file = CaptureFile::from_capture(id, &config.process.args, capture);
+        file.save(&path)?;
+
+        let mut event = AuditEvent::new(id, "seccomp", "captured").with_status("captured");
+        event = event.with_value(file.syscalls.len() as u64);
+        audit_log::append(&event)?;
+    }
+
     let exit_code = process_exit.code;
     let exit_signal = process_exit.signal.clone();
     let child_error = process_exit.error.clone();
