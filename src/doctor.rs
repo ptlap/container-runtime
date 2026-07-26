@@ -9,6 +9,7 @@ use std::process::Command;
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup/container-runtime";
 const NETWORK_STATE_ROOT: &str = "/run/crun-rs/network";
+const SECCOMP_ACTIONS_AVAIL: &str = "/proc/sys/kernel/seccomp/actions_avail";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DoctorReport {
@@ -43,8 +44,39 @@ pub fn run(fix: bool) -> Result<DoctorReport> {
     check_orphan_cgroups(&states, Path::new(CGROUP_ROOT), fix, &mut issues)?;
     check_stale_network_allocations(&states, Path::new(NETWORK_STATE_ROOT), fix, &mut issues)?;
     check_orphan_veth_links(&states, fix, &mut issues)?;
+    check_seccomp_log_action(Path::new(SECCOMP_ACTIONS_AVAIL), &mut issues);
 
     Ok(DoctorReport { issues })
+}
+
+/// Reports whether the kernel can log denied syscalls.
+///
+/// `--seccomp-action log` is how a generated profile is validated without
+/// breaking the workload, and it needs `SECCOMP_RET_LOG`. Nothing is broken
+/// without it, so this is informational rather than fixable.
+fn check_seccomp_log_action(path: &Path, issues: &mut Vec<DoctorIssue>) {
+    let Ok(actions) = fs::read_to_string(path) else {
+        issues.push(DoctorIssue {
+            kind: "seccomp-log-unknown".to_string(),
+            id: None,
+            path: Some(path.display().to_string()),
+            message: "cannot read the available seccomp actions; --seccomp-action log may not work"
+                .to_string(),
+            fixed: false,
+        });
+        return;
+    };
+
+    if !actions.split_whitespace().any(|action| action == "log") {
+        issues.push(DoctorIssue {
+            kind: "seccomp-log-unavailable".to_string(),
+            id: None,
+            path: Some(path.display().to_string()),
+            message: "this kernel does not offer SECCOMP_RET_LOG, so --seccomp-action log cannot record denied syscalls"
+                .to_string(),
+            fixed: false,
+        });
+    }
 }
 
 fn check_stale_running_states(
@@ -249,6 +281,46 @@ fn parse_veth_links(ip_output: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_a_kernel_without_the_seccomp_log_action() {
+        let path = std::env::temp_dir().join(format!("crun-actions-{}", std::process::id()));
+        std::fs::write(&path, "kill_process kill_thread trap errno trace allow\n")
+            .expect("actions file should write");
+        let mut issues = Vec::new();
+
+        check_seccomp_log_action(&path, &mut issues);
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind, "seccomp-log-unavailable");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn stays_quiet_when_the_seccomp_log_action_exists() {
+        let path = std::env::temp_dir().join(format!("crun-actions-ok-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            "kill_process kill_thread trap errno trace log allow\n",
+        )
+        .expect("actions file should write");
+        let mut issues = Vec::new();
+
+        check_seccomp_log_action(&path, &mut issues);
+
+        assert!(issues.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reports_when_the_available_actions_cannot_be_read() {
+        let mut issues = Vec::new();
+
+        check_seccomp_log_action(Path::new("/definitely/not/here"), &mut issues);
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind, "seccomp-log-unknown");
+    }
 
     #[test]
     fn parses_host_veth_names_from_ip_output() {

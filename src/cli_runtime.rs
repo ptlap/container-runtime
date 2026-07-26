@@ -122,17 +122,27 @@ pub fn list_containers(json: bool) -> Result<()> {
     }
 
     println!(
-        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<10} {:<10} BUNDLE",
-        "ID", "STATUS", "PID", "NET", "SECURITY", "USERNS", "ROOTFS", "PROFILE", "HEALTH"
+        "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<8} {:<10} {:<10} BUNDLE",
+        "ID",
+        "STATUS",
+        "PID",
+        "NET",
+        "SECURITY",
+        "SECCOMP",
+        "USERNS",
+        "ROOTFS",
+        "PROFILE",
+        "HEALTH"
     );
     for state in states {
         println!(
-            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<10} {:<10} {}",
+            "{:<24} {:<10} {:<8} {:<8} {:<11} {:<8} {:<8} {:<8} {:<10} {:<10} {}",
             state.id,
             format!("{:?}", state.status).to_lowercase(),
             state.pid.map_or("-".to_string(), |pid| pid.to_string()),
             state.network_mode,
             state.security_profile,
+            state.seccomp_mode,
             state.userns_mode,
             state.rootfs_mode,
             state.policy_profile,
@@ -226,6 +236,16 @@ pub fn inspect_security_command(id: &str, json: bool) -> Result<()> {
     }
     if let Some(filters) = inspection.seccomp.filters {
         println!("seccomp_filters: {filters}");
+    }
+    println!("seccomp_runtime_mode: {}", inspection.seccomp.runtime_mode);
+    if let Some(path) = inspection.seccomp.profile_path.as_deref() {
+        println!("seccomp_profile: {path}");
+    }
+    if let Some(action) = inspection.seccomp.action.as_deref() {
+        println!("seccomp_action: {action}");
+    }
+    if let Some(count) = inspection.seccomp.allowed_syscalls {
+        println!("seccomp_allowed_syscalls: {count}");
     }
     if let Some(value) = inspection.capabilities.effective.as_deref() {
         println!("cap_effective: {value}");

@@ -1,5 +1,6 @@
 use crate::cgroup::read_stats;
 use crate::error::InspectSecurityError;
+use crate::seccomp::profile::SeccompProfile;
 use crate::spec::config::{load_config, OciConfig};
 use crate::state::{self, ContainerStatus};
 use anyhow::{Context, Result};
@@ -29,6 +30,12 @@ pub struct SeccompInspection {
     pub mode: Option<u64>,
     pub filters: Option<u64>,
     pub enabled: bool,
+    /// What the runtime was asked to do: off, learn or enforce.
+    pub runtime_mode: String,
+    pub profile_path: Option<String>,
+    pub action: Option<String>,
+    /// How many syscalls the enforced profile allows on this architecture.
+    pub allowed_syscalls: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -70,10 +77,23 @@ pub fn inspect(id: &str) -> Result<SecurityInspection> {
     let config = load_config(&config_path)?;
     let proc_status = read_proc_security_status(pid)?;
     let resources = inspect_resources(&config, state.cgroup_path.as_deref())?;
+    // The kernel only reports that a filter is installed and how many; what it
+    // allows has to come from the profile the runtime was given.
+    let allowed_syscalls = state
+        .seccomp_profile
+        .as_deref()
+        .map(Path::new)
+        .and_then(|path| SeccompProfile::load(path).ok())
+        .map(|profile| profile.allowed_names_for_arch().len());
+
     let seccomp = SeccompInspection {
         mode: proc_status.seccomp_mode,
         filters: proc_status.seccomp_filters,
         enabled: proc_status.seccomp_mode.unwrap_or(0) != 0,
+        runtime_mode: state.seccomp_mode.clone(),
+        profile_path: state.seccomp_profile.clone(),
+        action: state.seccomp_action.clone(),
+        allowed_syscalls,
     };
     let capabilities = CapabilityInspection {
         inheritable: proc_status.cap_inheritable,
@@ -197,6 +217,17 @@ fn security_warnings(inspection: &SecurityInspection) -> Vec<String> {
     if !inspection.seccomp.enabled {
         warnings.push("seccomp is disabled".to_string());
     }
+    if inspection.seccomp.runtime_mode == "learn" {
+        warnings.push(
+            "seccomp is in learn mode: every syscall traps to the tracer and nothing is denied"
+                .to_string(),
+        );
+    }
+    if inspection.seccomp.action.as_deref() == Some("log") {
+        warnings.push(
+            "seccomp action is log: denied syscalls are recorded but still allowed".to_string(),
+        );
+    }
     if inspection.capabilities.effective_zero == Some(false) {
         warnings.push("effective capabilities are not fully dropped".to_string());
     }
@@ -276,6 +307,10 @@ Seccomp_filters:\t1
                 mode: Some(0),
                 filters: Some(0),
                 enabled: false,
+                runtime_mode: "off".to_string(),
+                profile_path: None,
+                action: None,
+                allowed_syscalls: None,
             },
             capabilities: CapabilityInspection {
                 inheritable: Some("0000000000000000".to_string()),
