@@ -46,10 +46,12 @@ for performance figures.
 
 ## Runtime
 
-**`crun exec` runs unfiltered.** `container_exec.rs` joins the container's
-namespaces with `setns` and never applies a seccomp filter, and seccomp is not
-inherited through `setns`. Any measured reduction applies to the container's
-main process tree, not to exec sessions. Listed as Goal 21.
+**`crun exec` applies the profile, healthchecks do not.** seccomp is not
+inherited through `setns`, so an exec session has to install the container's
+filter itself; it now does. Healthchecks deliberately still run unfiltered:
+they are the operator's own probe rather than container-controlled code, and
+confining them would report a container as unhealthy whenever its profile is
+narrower than its probe.
 
 **`create` and `start` are not OCI conformant.** `create` writes a state file and
 creates no process; `start` does the whole fork and exec and blocks until the

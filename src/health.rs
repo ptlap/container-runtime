@@ -83,6 +83,12 @@ pub fn run_once(id: &str) -> Result<HealthResult> {
             cwd: config.process.cwd.as_deref(),
             cgroup_path: state.cgroup_path.as_deref(),
             tty: false,
+            // The healthcheck runs unfiltered on purpose: it is the operator's
+            // own probe, not container-controlled code, and confining it would
+            // make a container look unhealthy whenever its profile is narrower
+            // than its probe.
+            seccomp_program: None,
+            seccomp_flags: 0,
         })?;
 
         let healthy = current_exit.code == Some(0) && current_exit.signal.is_none();

@@ -45,8 +45,8 @@ runtime does before the filter is installed is not covered by the filter. The
 memfd self-exec in `selfexec.rs` addresses one specific instance of this class,
 where a container overwrites the runtime binary through `/proc/self/exe`.
 
-**`crun exec` sessions.** They currently run without any filter at all. See
-`limitations.md`.
+**Healthcheck probes.** They run unfiltered by design, so a probe is not a
+confined execution context. `crun exec` sessions do get the container's filter.
 
 ## Trust boundaries
 

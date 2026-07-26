@@ -4,9 +4,11 @@ use crate::container::pty::{
 };
 use crate::error::ContainerError;
 use crate::fd::set_cloexec;
+use crate::seccomp::Program;
 use anyhow::{Context, Result};
 use libc;
 use nix::sched::{setns, CloneFlags};
+use nix::sys::prctl;
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{chdir, execvp, fork, setsid, ForkResult, Pid};
 use std::ffi::CString;
@@ -32,6 +34,13 @@ pub struct ExecConfig<'a> {
     pub cwd: Option<&'a str>,
     pub cgroup_path: Option<&'a str>,
     pub tty: bool,
+    /// The container's own filter, compiled by the caller.
+    ///
+    /// seccomp is not inherited through `setns`, so a process that joins the
+    /// container's namespaces starts unfiltered unless it installs the filter
+    /// itself.
+    pub seccomp_program: Option<&'a Program>,
+    pub seccomp_flags: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -134,7 +143,13 @@ fn run_namespace_helper(config: ExecConfig<'_>, pty_manager: Option<PtyManager>)
                     }
                 }
             }
-            exec_command(config.args, config.env, config.cwd)?;
+            exec_command(
+                config.args,
+                config.env,
+                config.cwd,
+                config.seccomp_program,
+                config.seccomp_flags,
+            )?;
             unreachable!();
         }
         ForkResult::Parent { child } => {
@@ -184,7 +199,13 @@ fn join_namespaces(target_pid: i32) -> Result<()> {
     Ok(())
 }
 
-fn exec_command(args: &[String], env: &[String], cwd: Option<&str>) -> Result<()> {
+fn exec_command(
+    args: &[String],
+    env: &[String],
+    cwd: Option<&str>,
+    seccomp_program: Option<&Program>,
+    seccomp_flags: u64,
+) -> Result<()> {
     let cwd = cwd.unwrap_or("/");
     chdir(cwd).with_context(|| format!("failed to chdir to container cwd: {cwd}"))?;
 
@@ -195,6 +216,15 @@ fn exec_command(args: &[String], env: &[String], cwd: Option<&str>) -> Result<()
         .iter()
         .map(|arg| CString::new(arg.as_str()).context("invalid exec argument"))
         .collect::<Result<Vec<_>>>()?;
+
+    if let Some(program) = seccomp_program {
+        // Installing a filter needs no_new_privs or CAP_SYS_ADMIN, and the
+        // exec'd process should be no more privileged than the container.
+        prctl::set_no_new_privs().context("failed to enable no_new_privs for exec")?;
+        program
+            .install(seccomp_flags)
+            .context("failed to install the seccomp filter for exec")?;
+    }
 
     execvp(&command, &c_args).context("failed to exec command")?;
 
@@ -244,6 +274,8 @@ mod tests {
             cwd: None,
             cgroup_path: None,
             tty: false,
+            seccomp_program: None,
+            seccomp_flags: 0,
         };
 
         let error = exec_in_container(config).expect_err("empty exec args should be rejected");

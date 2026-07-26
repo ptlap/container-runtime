@@ -409,7 +409,7 @@ Objective: the work that deepens the evaluation once the core numbers exist.
 
 - [ ] Compare a binary-search filter against the linear chain.
 - [ ] Add an eBPF capture backend behind a feature flag and compare its overhead.
-- [ ] Apply a filter to `crun exec`, which currently runs unconfined.
+- [x] Apply the container's filter to `crun exec`.
 - [ ] Give `create` and `start` OCI semantics with a detached container process.
 - [ ] Rename `--net bridge`, which is really per-container veth plus NAT.
 

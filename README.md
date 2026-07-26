@@ -133,8 +133,8 @@ reruns with `sudo scripts/reproduce.sh --quick`.
 
 - OCI support is partial: `create` writes state without creating a process, and
   `start` blocks until the container exits, so there is no detached mode.
-- `crun exec` runs without a seccomp filter, because seccomp is not inherited
-  through `setns`.
+- Healthcheck probes run without a seccomp filter, by design; `crun exec`
+  installs the container's own filter.
 - Learn mode observes only the paths a run exercised, so a generated profile can
   miss syscalls a rarer path needs. See `docs/research/limitations.md`.
 - `--net bridge` creates a veth pair and NAT per container rather than a shared

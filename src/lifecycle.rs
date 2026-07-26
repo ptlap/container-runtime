@@ -180,6 +180,7 @@ pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
         .pid
         .ok_or_else(|| LifecycleError::ContainerHasNoPid { id: id.to_string() })?;
     let config = load_config(Path::new(&state.bundle).join("config.json"))?;
+    let compiled = exec_seccomp_program(&state)?;
 
     let exit = exec_in_container(ExecConfig {
         target_pid: pid,
@@ -188,6 +189,8 @@ pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
         cwd: config.process.cwd.as_deref(),
         cgroup_path: state.cgroup_path.as_deref(),
         tty,
+        seccomp_program: compiled.as_ref().map(|compiled| &compiled.program),
+        seccomp_flags: 0,
     })?;
 
     let report = ExecReport {
@@ -197,6 +200,38 @@ pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
     audit_exec(id, &report)?;
 
     Ok(report)
+}
+
+/// Compiles the container's own profile so an exec'd process is confined the
+/// same way its main process is.
+///
+/// Joining namespaces with `setns` does not carry seccomp across, so without
+/// this an exec session runs unfiltered inside an otherwise confined container.
+fn exec_seccomp_program(state: &ContainerState) -> Result<Option<seccomp::CompiledProfile>> {
+    let Some(path) = state.seccomp_profile.as_deref() else {
+        return Ok(None);
+    };
+    if state.seccomp_mode != "enforce" {
+        return Ok(None);
+    }
+
+    let action = state
+        .seccomp_action
+        .as_deref()
+        .map(seccomp::parse_action)
+        .transpose()?
+        .unwrap_or(seccomp::SeccompAction::Errno);
+
+    let profile = seccomp::profile::SeccompProfile::load(Path::new(path))?;
+    let compiled = seccomp::compile::compile(
+        &profile,
+        seccomp::CompileOptions {
+            default_action: action,
+            order: seccomp::SyscallOrder::ByFrequency,
+        },
+    )?;
+
+    Ok(Some(compiled))
 }
 
 pub fn delete(id: &str) -> Result<()> {
