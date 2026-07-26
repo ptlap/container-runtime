@@ -542,7 +542,6 @@ pub fn trace_container(id: &str, json: bool, strace: bool, duration_ms: u64) -> 
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 
