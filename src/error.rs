@@ -253,6 +253,9 @@ pub enum SeccompError {
 
     #[error("seccomp is not supported on this architecture")]
     UnsupportedArchitecture,
+
+    #[error("syscall number does not fit a seccomp comparison: {number}")]
+    InvalidSyscallNumber { number: i64 },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

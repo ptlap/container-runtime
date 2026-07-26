@@ -8,6 +8,8 @@
 
 pub mod arch;
 pub mod bpf;
+pub mod compile;
+pub mod profile;
 pub mod syscalls;
 
 #[cfg(target_arch = "aarch64")]
