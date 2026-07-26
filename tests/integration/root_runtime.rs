@@ -201,6 +201,51 @@ fn wait_until_running(id: &str) {
 
 #[test]
 #[ignore = "requires root"]
+fn container_env_is_not_inherited_from_host() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-env");
+    let bundle = TestBundle::new("bundle-env", &["/bin/sh", "-c", "env"], "")
+        .expect("bundle should be created");
+
+    let output = Command::new(crun())
+        .args([
+            "run",
+            "--net",
+            "none",
+            "--security",
+            "unconfined",
+            "--log",
+            "on",
+            id.as_str(),
+        ])
+        .arg(&bundle.path)
+        .env("CRUN_TEST_LEAK", "leaked-from-host")
+        .output()
+        .expect("failed to run crun");
+    assert_success(&output);
+
+    let logs = run_crun(&["logs", &id]);
+    assert_success(&logs);
+    let logs = String::from_utf8_lossy(&logs.stdout);
+
+    assert!(
+        !logs.contains("CRUN_TEST_LEAK"),
+        "host environment leaked into the container: {logs}"
+    );
+    assert!(
+        logs.contains("PATH=/usr/local/sbin"),
+        "container is missing the bundle environment: {logs}"
+    );
+
+    assert_success(&run_crun(&["delete", &id]));
+}
+
+#[test]
+#[ignore = "requires root"]
 fn run_state_delete_smoke() {
     if !require_root() {
         return;

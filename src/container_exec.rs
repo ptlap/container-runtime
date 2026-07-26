@@ -1,3 +1,4 @@
+use crate::container::env::replace_environment;
 use crate::container::pty::{
     proxy_pty, register_sigwinch, unregister_sigwinch, PtyManager, RawTerminalGuard,
 };
@@ -186,11 +187,7 @@ fn exec_command(args: &[String], env: &[String], cwd: Option<&str>) -> Result<()
     let cwd = cwd.unwrap_or("/");
     chdir(cwd).with_context(|| format!("failed to chdir to container cwd: {cwd}"))?;
 
-    for item in env {
-        if let Some((key, value)) = item.split_once('=') {
-            std::env::set_var(key, value);
-        }
-    }
+    replace_environment(env)?;
 
     let command = CString::new(args[0].as_str()).context("invalid exec command")?;
     let c_args = args

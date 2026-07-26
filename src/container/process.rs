@@ -647,11 +647,7 @@ fn run_child(
 
     security::apply(config.security_profile)?;
 
-    for item in config.env {
-        if let Some((key, value)) = item.split_once('=') {
-            std::env::set_var(key, value);
-        }
-    }
+    super::env::replace_environment(config.env)?;
 
     execvp(&command, &c_args).context("failed to exec process")?;
 
