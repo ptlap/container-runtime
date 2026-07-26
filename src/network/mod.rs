@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 const CONTAINER_IFACE: &str = "eth0";
 const DEFAULT_NETWORK_STATE_ROOT: &str = "/run/crun-rs/network";
@@ -93,8 +94,8 @@ struct AllocationLock {
 impl Drop for AllocationLock {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_dir_all(&self.path) {
-            eprintln!(
-                "warn: failed to release network allocation lock {}: {error}",
+            warn!(
+                "failed to release network allocation lock {}: {error}",
                 self.path.display()
             );
         }

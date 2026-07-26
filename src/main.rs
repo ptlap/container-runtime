@@ -302,15 +302,19 @@ fn init_logging(log_level: &str, log_format: &str) -> Result<()> {
         .or_else(|_| EnvFilter::try_new(log_level))
         .unwrap_or_else(|_| EnvFilter::new("info"));
 
+    // Logs go to stderr so stdout carries command output only and stays
+    // machine-readable for scripted runs.
     if log_format.eq_ignore_ascii_case("json") {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
+            .with_writer(io::stderr)
             .json()
             .try_init()
             .map_err(|e| anyhow::anyhow!("failed to initialize json logger: {e}"))?;
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
+            .with_writer(io::stderr)
             .try_init()
             .map_err(|e| anyhow::anyhow!("failed to initialize text logger: {e}"))?;
     }

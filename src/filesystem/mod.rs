@@ -4,6 +4,7 @@ use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use nix::unistd::{chdir, pivot_root};
 use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
+use tracing::warn;
 
 use crate::error::FilesystemError;
 use crate::spec::config::{CrunConfig, Mount};
@@ -160,7 +161,7 @@ pub fn setup_rootfs(rootfs: &Path, readonly: bool, mounts: &[Mount]) -> Result<(
     umount2("/.old_root", MntFlags::MNT_DETACH).context("failed to unmount old root")?;
 
     if let Err(error) = fs::remove_dir("/.old_root") {
-        eprintln!("warn: could not remove .old_root: {error}");
+        warn!("could not remove .old_root: {error}");
     }
 
     let proc_dir = Path::new("/proc");

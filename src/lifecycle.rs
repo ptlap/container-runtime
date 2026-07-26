@@ -20,6 +20,7 @@ use crate::signal::{parse_signal, send_signal};
 use crate::spec::config::load_config;
 use crate::state::{self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources};
 use crate::userns::UserNamespaceMode;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct ContainerRunOptions<'a> {
@@ -292,10 +293,6 @@ pub fn run_container_process(
 
     let rootfs = resolve_rootfs(bundle, &config.root.path, config.crun.as_ref());
 
-    println!("args: {:?}", config.process.args);
-    println!("env: {:?}", config.process.env);
-    println!("rootfs: {}", rootfs.path.display());
-
     let namespaces = config
         .linux
         .as_ref()
@@ -310,14 +307,22 @@ pub fn run_container_process(
 
     let flags = effective_namespace_flags(&namespaces, network_mode, userns_mode);
 
-    println!("namespaces: {:?}", namespaces);
-    println!("clone flags: {:?}", flags);
-    println!("network mode: {}", network_mode.as_str());
-    println!("security profile: {}", security_profile.as_str());
-    println!("log mode: {}", log_mode.as_str());
-    println!("user namespace: {}", userns_mode.as_str());
-    println!("rootfs mode: {}", rootfs.mode.as_str());
-    println!("policy profile: {}", policy_profile.as_str());
+    // Environment values may carry secrets, so only their count is recorded.
+    info!(
+        container_id = id,
+        args = ?config.process.args,
+        env_count = config.process.env.len(),
+        rootfs = %rootfs.path.display(),
+        namespaces = ?namespaces,
+        clone_flags = ?flags,
+        network_mode = network_mode.as_str(),
+        security_profile = security_profile.as_str(),
+        log_mode = log_mode.as_str(),
+        userns_mode = userns_mode.as_str(),
+        rootfs_mode = rootfs.mode.as_str(),
+        policy_profile = policy_profile.as_str(),
+        "starting container process"
+    );
 
     let masked_paths = config
         .linux

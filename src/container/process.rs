@@ -22,7 +22,7 @@ use std::ffi::CString;
 use std::fs;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::Path;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 struct ChildConfig<'a> {
     args: &'a [String],
@@ -493,13 +493,17 @@ pub fn run_process(
 
             match status {
                 WaitStatus::Exited(_, code) => {
-                    println!("container process exited with code: {code}");
+                    info!(pid = child_pid, code, "container process exited");
                 }
                 WaitStatus::Signaled(_, signal, _) => {
-                    println!("container process killed by signal: {signal:?}");
+                    info!(
+                        pid = child_pid,
+                        ?signal,
+                        "container process killed by signal"
+                    );
                 }
                 other => {
-                    println!("container process ended with status: {other:?}");
+                    info!(pid = child_pid, status = ?other, "container process ended");
                 }
             }
 

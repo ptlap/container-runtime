@@ -13,6 +13,7 @@ use std::ffi::CString;
 use std::fs::{self, File};
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use tracing::{error, warn};
 
 const NAMESPACES: [(&str, CloneFlags); 6] = [
     ("user", CloneFlags::CLONE_NEWUSER),
@@ -78,7 +79,7 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
             }
 
             if let Err(error) = run_namespace_helper(config, pty_manager) {
-                eprintln!("exec error: {error}");
+                error!("exec error: {error}");
                 std::process::exit(1);
             }
 
@@ -91,7 +92,7 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
 
             if let Some(cgroup_path) = config.cgroup_path {
                 if let Err(error) = add_to_cgroup(cgroup_path, child) {
-                    eprintln!("warn: could not add exec helper to container cgroup: {error}");
+                    warn!("could not add exec helper to container cgroup: {error}");
                 }
             }
 
@@ -141,7 +142,7 @@ fn run_namespace_helper(config: ExecConfig<'_>, pty_manager: Option<PtyManager>)
             match (exit.code, exit.signal) {
                 (Some(code), _) => std::process::exit(code),
                 (None, Some(signal)) => {
-                    eprintln!("exec process killed by signal: {signal}");
+                    warn!("exec process killed by signal: {signal}");
                     std::process::exit(128);
                 }
                 (None, None) => std::process::exit(1),

@@ -8,6 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 pub const DEFAULT_STATE_ROOT: &str = "/run/crun-rs";
 pub const STATE_SCHEMA_VERSION: u32 = 1;
@@ -366,8 +367,8 @@ fn release_state_network_allocation(state: &ContainerState) {
     }
 
     if let Err(error) = release_bridge_network(&state.id) {
-        eprintln!(
-            "warn: failed to release bridge subnet for stale container {}: {error}",
+        warn!(
+            "failed to release bridge subnet for stale container {}: {error}",
             state.id
         );
     }
