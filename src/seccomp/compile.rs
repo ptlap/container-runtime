@@ -291,6 +291,61 @@ mod tests {
         assert_eq!(compiled.allowed.last().copied(), syscalls::number("write"));
     }
 
+    /// Position in the chain is what frequency ordering buys: the emitted
+    /// program is a prologue plus two instructions per candidate, so a syscall
+    /// compared at position n costs prologue + 2n + 1 instructions on every
+    /// call. This asserts the hot syscall really does land at the front.
+    #[test]
+    fn frequency_ordering_shortens_the_path_for_hot_syscalls() {
+        let mut names = BTreeSet::new();
+        for entry in syscalls::table().iter().take(120) {
+            names.insert(entry.name.to_string());
+        }
+        names.insert("epoll_pwait".to_string());
+
+        let hot = syscalls::number("epoll_pwait").expect("epoll_pwait exists");
+        let profile = build_profile(
+            &names,
+            LinuxSeccompAction::ScmpActErrno,
+            Some(1),
+            Some(metadata_with_counts(&[("epoll_pwait", 100_000)])),
+        )
+        .expect("profile should build");
+
+        let by_number = compile(
+            &profile,
+            CompileOptions {
+                default_action: SeccompAction::Errno,
+                order: SyscallOrder::ByNumber,
+            },
+        )
+        .expect("profile should compile");
+        let by_frequency = compile(
+            &profile,
+            CompileOptions {
+                default_action: SeccompAction::Errno,
+                order: SyscallOrder::ByFrequency,
+            },
+        )
+        .expect("profile should compile");
+
+        let position = |compiled: &CompiledProfile| {
+            compiled
+                .allowed
+                .iter()
+                .position(|value| *value == hot)
+                .expect("the hot syscall is allowed")
+        };
+
+        assert_eq!(position(&by_frequency), 0);
+        assert!(
+            position(&by_number) > 20,
+            "numeric order should leave the hot syscall deep in the chain"
+        );
+        // Same program length either way; only the order changes.
+        assert_eq!(by_number.program.len(), by_frequency.program.len());
+    }
+
     #[test]
     fn keeps_numeric_order_without_frequency_data() {
         let profile = build_profile(
