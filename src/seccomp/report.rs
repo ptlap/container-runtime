@@ -144,16 +144,24 @@ pub struct ComparisonReport {
     pub cve: Option<CveCoverage>,
 }
 
+/// The baseline to measure against: where it came from, and what it allows on
+/// this architecture for the capability set being modelled.
+#[derive(Debug, Clone)]
+pub struct Baseline {
+    pub path: String,
+    pub allowed: BTreeSet<String>,
+}
+
 pub fn compare(
     profile_path: &Path,
     profile: &SeccompProfile,
-    baseline: Option<(&Path, &SeccompProfile)>,
+    baseline: Option<&Baseline>,
     cve_map: Option<&CveMap>,
 ) -> ComparisonReport {
     let universe_count = syscalls::table().len();
     let profile_allowed = profile.allowed_names_for_arch();
 
-    let baseline_allowed = baseline.map(|(_, value)| value.allowed_names_for_arch());
+    let baseline_allowed = baseline.map(|value| value.allowed.clone());
     let reduction_vs_baseline = baseline_allowed.as_ref().and_then(|allowed| {
         (!allowed.is_empty()).then(|| 1.0 - (profile_allowed.len() as f64 / allowed.len() as f64))
     });
@@ -177,7 +185,7 @@ pub fn compare(
 
     ComparisonReport {
         profile: profile_path.display().to_string(),
-        baseline: baseline.map(|(path, _)| path.display().to_string()),
+        baseline: baseline.map(|value| value.path.clone()),
         arch: arch::NATIVE_ARCH_NAME.to_string(),
         universe_count,
         profile_allowed: profile_allowed.len(),
@@ -257,6 +265,13 @@ mod tests {
         values.iter().map(|value| value.to_string()).collect()
     }
 
+    fn baseline_of(values: &[&str]) -> Baseline {
+        Baseline {
+            path: "baseline.json".to_string(),
+            allowed: names(values),
+        }
+    }
+
     fn profile_of(values: &[&str]) -> SeccompProfile {
         build_profile(
             &names(values),
@@ -288,14 +303,9 @@ mod tests {
     #[test]
     fn computes_reduction_against_a_baseline() {
         let profile = profile_of(&["read", "write"]);
-        let baseline = profile_of(&["read", "write", "openat", "mount"]);
+        let baseline = baseline_of(&["read", "write", "openat", "mount"]);
 
-        let report = compare(
-            Path::new("profile.json"),
-            &profile,
-            Some((Path::new("baseline.json"), &baseline)),
-            None,
-        );
+        let report = compare(Path::new("profile.json"), &profile, Some(&baseline), None);
 
         assert_eq!(report.profile_allowed, 2);
         assert_eq!(report.baseline_allowed, Some(4));
@@ -307,14 +317,9 @@ mod tests {
     #[test]
     fn reports_syscalls_the_baseline_would_have_blocked() {
         let profile = profile_of(&["read", "ptrace"]);
-        let baseline = profile_of(&["read"]);
+        let baseline = baseline_of(&["read"]);
 
-        let report = compare(
-            Path::new("profile.json"),
-            &profile,
-            Some((Path::new("baseline.json"), &baseline)),
-            None,
-        );
+        let report = compare(Path::new("profile.json"), &profile, Some(&baseline), None);
 
         assert_eq!(report.over_allowed, vec!["ptrace"]);
     }
@@ -358,7 +363,7 @@ mod tests {
     #[test]
     fn counts_cves_the_profile_blocks_that_the_baseline_does_not() {
         let profile = profile_of(&["read"]);
-        let baseline = profile_of(&["read", "splice"]);
+        let baseline = baseline_of(&["read", "splice"]);
         let map = CveMap {
             schema_version: 1,
             arch: "x86_64".to_string(),
@@ -371,7 +376,7 @@ mod tests {
         let report = compare(
             Path::new("profile.json"),
             &profile,
-            Some((Path::new("baseline.json"), &baseline)),
+            Some(&baseline),
             Some(&map),
         );
 

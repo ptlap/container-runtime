@@ -9,6 +9,7 @@ use crate::inspect_security;
 use crate::lifecycle;
 use crate::modes::LogMode;
 use crate::rootfs_diff;
+use crate::seccomp::baseline;
 use crate::seccomp::capture::CaptureFile;
 use crate::seccomp::profile::SeccompProfile;
 use crate::seccomp::{
@@ -613,15 +614,23 @@ pub fn seccomp_compare(
     json: bool,
 ) -> Result<()> {
     let profile = SeccompProfile::load(path)?;
-    let baseline_profile = baseline.map(SeccompProfile::load).transpose()?;
+    // Read through the Docker-aware loader: baseline profiles gate rules on
+    // capabilities and architecture, and counting every allow rule would
+    // overstate what the baseline really permits.
+    let baseline_options = baseline::BaselineOptions::default();
+    let baseline = baseline
+        .map(|path| {
+            baseline::allowed_names_for_arch(path, &baseline_options).map(|allowed| {
+                report::Baseline {
+                    path: path.display().to_string(),
+                    allowed,
+                }
+            })
+        })
+        .transpose()?;
     let cve_map = cve_map.map(report::CveMap::load).transpose()?;
 
-    let report = report::compare(
-        path,
-        &profile,
-        baseline.zip(baseline_profile.as_ref()),
-        cve_map.as_ref(),
-    );
+    let report = report::compare(path, &profile, baseline.as_ref(), cve_map.as_ref());
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);

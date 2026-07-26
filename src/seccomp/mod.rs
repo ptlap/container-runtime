@@ -7,6 +7,7 @@
 //! * an allowlist compiled from a generated profile.
 
 pub mod arch;
+pub mod baseline;
 pub mod bpf;
 pub mod capture;
 pub mod collector;

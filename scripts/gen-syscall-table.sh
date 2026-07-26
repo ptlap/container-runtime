@@ -80,6 +80,7 @@ for arch in $ARCHES; do
         echo "use super::syscalls::SyscallEntry;"
         echo
         echo "/// Sorted by name."
+        echo "#[rustfmt::skip]"
         echo "pub(super) const TABLE: &[SyscallEntry] = &["
         printf '%s\n' "$entries" | LC_ALL=C sort -k1,1 | while read -r name number; do
             printf '    SyscallEntry { name: "%s", number: %s },\n' "$name" "$number"
@@ -87,6 +88,7 @@ for arch in $ARCHES; do
         echo "];"
         echo
         echo "/// Sorted by number."
+        echo "#[rustfmt::skip]"
         echo "pub(super) const BY_NUMBER: &[SyscallEntry] = &["
         printf '%s\n' "$entries" | LC_ALL=C sort -k2,2n | while read -r name number; do
             printf '    SyscallEntry { name: "%s", number: %s },\n' "$name" "$number"

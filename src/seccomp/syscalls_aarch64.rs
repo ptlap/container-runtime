@@ -5,2409 +5,611 @@
 use super::syscalls::SyscallEntry;
 
 /// Sorted by name.
+#[rustfmt::skip]
 pub(super) const TABLE: &[SyscallEntry] = &[
-    SyscallEntry {
-        name: "accept",
-        number: 202,
-    },
-    SyscallEntry {
-        name: "accept4",
-        number: 242,
-    },
-    SyscallEntry {
-        name: "acct",
-        number: 89,
-    },
-    SyscallEntry {
-        name: "add_key",
-        number: 217,
-    },
-    SyscallEntry {
-        name: "adjtimex",
-        number: 171,
-    },
-    SyscallEntry {
-        name: "bind",
-        number: 200,
-    },
-    SyscallEntry {
-        name: "bpf",
-        number: 280,
-    },
-    SyscallEntry {
-        name: "brk",
-        number: 214,
-    },
-    SyscallEntry {
-        name: "capget",
-        number: 90,
-    },
-    SyscallEntry {
-        name: "capset",
-        number: 91,
-    },
-    SyscallEntry {
-        name: "chdir",
-        number: 49,
-    },
-    SyscallEntry {
-        name: "chroot",
-        number: 51,
-    },
-    SyscallEntry {
-        name: "clock_adjtime",
-        number: 266,
-    },
-    SyscallEntry {
-        name: "clock_getres",
-        number: 114,
-    },
-    SyscallEntry {
-        name: "clock_gettime",
-        number: 113,
-    },
-    SyscallEntry {
-        name: "clock_nanosleep",
-        number: 115,
-    },
-    SyscallEntry {
-        name: "clock_settime",
-        number: 112,
-    },
-    SyscallEntry {
-        name: "clone",
-        number: 220,
-    },
-    SyscallEntry {
-        name: "clone3",
-        number: 435,
-    },
-    SyscallEntry {
-        name: "close",
-        number: 57,
-    },
-    SyscallEntry {
-        name: "close_range",
-        number: 436,
-    },
-    SyscallEntry {
-        name: "connect",
-        number: 203,
-    },
-    SyscallEntry {
-        name: "copy_file_range",
-        number: 285,
-    },
-    SyscallEntry {
-        name: "delete_module",
-        number: 106,
-    },
-    SyscallEntry {
-        name: "dup",
-        number: 23,
-    },
-    SyscallEntry {
-        name: "dup3",
-        number: 24,
-    },
-    SyscallEntry {
-        name: "epoll_create1",
-        number: 20,
-    },
-    SyscallEntry {
-        name: "epoll_ctl",
-        number: 21,
-    },
-    SyscallEntry {
-        name: "epoll_pwait",
-        number: 22,
-    },
-    SyscallEntry {
-        name: "epoll_pwait2",
-        number: 441,
-    },
-    SyscallEntry {
-        name: "eventfd2",
-        number: 19,
-    },
-    SyscallEntry {
-        name: "execve",
-        number: 221,
-    },
-    SyscallEntry {
-        name: "execveat",
-        number: 281,
-    },
-    SyscallEntry {
-        name: "exit",
-        number: 93,
-    },
-    SyscallEntry {
-        name: "exit_group",
-        number: 94,
-    },
-    SyscallEntry {
-        name: "faccessat",
-        number: 48,
-    },
-    SyscallEntry {
-        name: "faccessat2",
-        number: 439,
-    },
-    SyscallEntry {
-        name: "fallocate",
-        number: 47,
-    },
-    SyscallEntry {
-        name: "fanotify_init",
-        number: 262,
-    },
-    SyscallEntry {
-        name: "fanotify_mark",
-        number: 263,
-    },
-    SyscallEntry {
-        name: "fchdir",
-        number: 50,
-    },
-    SyscallEntry {
-        name: "fchmod",
-        number: 52,
-    },
-    SyscallEntry {
-        name: "fchmodat",
-        number: 53,
-    },
-    SyscallEntry {
-        name: "fchown",
-        number: 55,
-    },
-    SyscallEntry {
-        name: "fchownat",
-        number: 54,
-    },
-    SyscallEntry {
-        name: "fcntl",
-        number: 25,
-    },
-    SyscallEntry {
-        name: "fdatasync",
-        number: 83,
-    },
-    SyscallEntry {
-        name: "fgetxattr",
-        number: 10,
-    },
-    SyscallEntry {
-        name: "finit_module",
-        number: 273,
-    },
-    SyscallEntry {
-        name: "flistxattr",
-        number: 13,
-    },
-    SyscallEntry {
-        name: "flock",
-        number: 32,
-    },
-    SyscallEntry {
-        name: "fremovexattr",
-        number: 16,
-    },
-    SyscallEntry {
-        name: "fsconfig",
-        number: 431,
-    },
-    SyscallEntry {
-        name: "fsetxattr",
-        number: 7,
-    },
-    SyscallEntry {
-        name: "fsmount",
-        number: 432,
-    },
-    SyscallEntry {
-        name: "fsopen",
-        number: 430,
-    },
-    SyscallEntry {
-        name: "fspick",
-        number: 433,
-    },
-    SyscallEntry {
-        name: "fstat",
-        number: 80,
-    },
-    SyscallEntry {
-        name: "fstatfs",
-        number: 44,
-    },
-    SyscallEntry {
-        name: "fsync",
-        number: 82,
-    },
-    SyscallEntry {
-        name: "ftruncate",
-        number: 46,
-    },
-    SyscallEntry {
-        name: "futex",
-        number: 98,
-    },
-    SyscallEntry {
-        name: "futex_waitv",
-        number: 449,
-    },
-    SyscallEntry {
-        name: "get_mempolicy",
-        number: 236,
-    },
-    SyscallEntry {
-        name: "get_robust_list",
-        number: 100,
-    },
-    SyscallEntry {
-        name: "getcpu",
-        number: 168,
-    },
-    SyscallEntry {
-        name: "getcwd",
-        number: 17,
-    },
-    SyscallEntry {
-        name: "getdents64",
-        number: 61,
-    },
-    SyscallEntry {
-        name: "getegid",
-        number: 177,
-    },
-    SyscallEntry {
-        name: "geteuid",
-        number: 175,
-    },
-    SyscallEntry {
-        name: "getgid",
-        number: 176,
-    },
-    SyscallEntry {
-        name: "getgroups",
-        number: 158,
-    },
-    SyscallEntry {
-        name: "getitimer",
-        number: 102,
-    },
-    SyscallEntry {
-        name: "getpeername",
-        number: 205,
-    },
-    SyscallEntry {
-        name: "getpgid",
-        number: 155,
-    },
-    SyscallEntry {
-        name: "getpid",
-        number: 172,
-    },
-    SyscallEntry {
-        name: "getppid",
-        number: 173,
-    },
-    SyscallEntry {
-        name: "getpriority",
-        number: 141,
-    },
-    SyscallEntry {
-        name: "getrandom",
-        number: 278,
-    },
-    SyscallEntry {
-        name: "getresgid",
-        number: 150,
-    },
-    SyscallEntry {
-        name: "getresuid",
-        number: 148,
-    },
-    SyscallEntry {
-        name: "getrusage",
-        number: 165,
-    },
-    SyscallEntry {
-        name: "getsid",
-        number: 156,
-    },
-    SyscallEntry {
-        name: "getsockname",
-        number: 204,
-    },
-    SyscallEntry {
-        name: "getsockopt",
-        number: 209,
-    },
-    SyscallEntry {
-        name: "gettid",
-        number: 178,
-    },
-    SyscallEntry {
-        name: "gettimeofday",
-        number: 169,
-    },
-    SyscallEntry {
-        name: "getuid",
-        number: 174,
-    },
-    SyscallEntry {
-        name: "getxattr",
-        number: 8,
-    },
-    SyscallEntry {
-        name: "init_module",
-        number: 105,
-    },
-    SyscallEntry {
-        name: "inotify_add_watch",
-        number: 27,
-    },
-    SyscallEntry {
-        name: "inotify_init1",
-        number: 26,
-    },
-    SyscallEntry {
-        name: "inotify_rm_watch",
-        number: 28,
-    },
-    SyscallEntry {
-        name: "io_cancel",
-        number: 3,
-    },
-    SyscallEntry {
-        name: "io_destroy",
-        number: 1,
-    },
-    SyscallEntry {
-        name: "io_getevents",
-        number: 4,
-    },
-    SyscallEntry {
-        name: "io_setup",
-        number: 0,
-    },
-    SyscallEntry {
-        name: "io_submit",
-        number: 2,
-    },
-    SyscallEntry {
-        name: "io_uring_enter",
-        number: 426,
-    },
-    SyscallEntry {
-        name: "io_uring_register",
-        number: 427,
-    },
-    SyscallEntry {
-        name: "io_uring_setup",
-        number: 425,
-    },
-    SyscallEntry {
-        name: "ioctl",
-        number: 29,
-    },
-    SyscallEntry {
-        name: "ioprio_get",
-        number: 31,
-    },
-    SyscallEntry {
-        name: "ioprio_set",
-        number: 30,
-    },
-    SyscallEntry {
-        name: "kcmp",
-        number: 272,
-    },
-    SyscallEntry {
-        name: "kexec_file_load",
-        number: 294,
-    },
-    SyscallEntry {
-        name: "kexec_load",
-        number: 104,
-    },
-    SyscallEntry {
-        name: "keyctl",
-        number: 219,
-    },
-    SyscallEntry {
-        name: "kill",
-        number: 129,
-    },
-    SyscallEntry {
-        name: "landlock_add_rule",
-        number: 445,
-    },
-    SyscallEntry {
-        name: "landlock_create_ruleset",
-        number: 444,
-    },
-    SyscallEntry {
-        name: "landlock_restrict_self",
-        number: 446,
-    },
-    SyscallEntry {
-        name: "lgetxattr",
-        number: 9,
-    },
-    SyscallEntry {
-        name: "linkat",
-        number: 37,
-    },
-    SyscallEntry {
-        name: "listen",
-        number: 201,
-    },
-    SyscallEntry {
-        name: "listxattr",
-        number: 11,
-    },
-    SyscallEntry {
-        name: "llistxattr",
-        number: 12,
-    },
-    SyscallEntry {
-        name: "lookup_dcookie",
-        number: 18,
-    },
-    SyscallEntry {
-        name: "lremovexattr",
-        number: 15,
-    },
-    SyscallEntry {
-        name: "lseek",
-        number: 62,
-    },
-    SyscallEntry {
-        name: "lsetxattr",
-        number: 6,
-    },
-    SyscallEntry {
-        name: "madvise",
-        number: 233,
-    },
-    SyscallEntry {
-        name: "mbind",
-        number: 235,
-    },
-    SyscallEntry {
-        name: "membarrier",
-        number: 283,
-    },
-    SyscallEntry {
-        name: "memfd_create",
-        number: 279,
-    },
-    SyscallEntry {
-        name: "memfd_secret",
-        number: 447,
-    },
-    SyscallEntry {
-        name: "migrate_pages",
-        number: 238,
-    },
-    SyscallEntry {
-        name: "mincore",
-        number: 232,
-    },
-    SyscallEntry {
-        name: "mkdirat",
-        number: 34,
-    },
-    SyscallEntry {
-        name: "mknodat",
-        number: 33,
-    },
-    SyscallEntry {
-        name: "mlock",
-        number: 228,
-    },
-    SyscallEntry {
-        name: "mlock2",
-        number: 284,
-    },
-    SyscallEntry {
-        name: "mlockall",
-        number: 230,
-    },
-    SyscallEntry {
-        name: "mmap",
-        number: 222,
-    },
-    SyscallEntry {
-        name: "mount",
-        number: 40,
-    },
-    SyscallEntry {
-        name: "mount_setattr",
-        number: 442,
-    },
-    SyscallEntry {
-        name: "move_mount",
-        number: 429,
-    },
-    SyscallEntry {
-        name: "move_pages",
-        number: 239,
-    },
-    SyscallEntry {
-        name: "mprotect",
-        number: 226,
-    },
-    SyscallEntry {
-        name: "mq_getsetattr",
-        number: 185,
-    },
-    SyscallEntry {
-        name: "mq_notify",
-        number: 184,
-    },
-    SyscallEntry {
-        name: "mq_open",
-        number: 180,
-    },
-    SyscallEntry {
-        name: "mq_timedreceive",
-        number: 183,
-    },
-    SyscallEntry {
-        name: "mq_timedsend",
-        number: 182,
-    },
-    SyscallEntry {
-        name: "mq_unlink",
-        number: 181,
-    },
-    SyscallEntry {
-        name: "mremap",
-        number: 216,
-    },
-    SyscallEntry {
-        name: "mseal",
-        number: 462,
-    },
-    SyscallEntry {
-        name: "msgctl",
-        number: 187,
-    },
-    SyscallEntry {
-        name: "msgget",
-        number: 186,
-    },
-    SyscallEntry {
-        name: "msgrcv",
-        number: 188,
-    },
-    SyscallEntry {
-        name: "msgsnd",
-        number: 189,
-    },
-    SyscallEntry {
-        name: "msync",
-        number: 227,
-    },
-    SyscallEntry {
-        name: "munlock",
-        number: 229,
-    },
-    SyscallEntry {
-        name: "munlockall",
-        number: 231,
-    },
-    SyscallEntry {
-        name: "munmap",
-        number: 215,
-    },
-    SyscallEntry {
-        name: "name_to_handle_at",
-        number: 264,
-    },
-    SyscallEntry {
-        name: "nanosleep",
-        number: 101,
-    },
-    SyscallEntry {
-        name: "newfstatat",
-        number: 79,
-    },
-    SyscallEntry {
-        name: "nfsservctl",
-        number: 42,
-    },
-    SyscallEntry {
-        name: "open_by_handle_at",
-        number: 265,
-    },
-    SyscallEntry {
-        name: "open_tree",
-        number: 428,
-    },
-    SyscallEntry {
-        name: "openat",
-        number: 56,
-    },
-    SyscallEntry {
-        name: "openat2",
-        number: 437,
-    },
-    SyscallEntry {
-        name: "perf_event_open",
-        number: 241,
-    },
-    SyscallEntry {
-        name: "personality",
-        number: 92,
-    },
-    SyscallEntry {
-        name: "pidfd_getfd",
-        number: 438,
-    },
-    SyscallEntry {
-        name: "pidfd_open",
-        number: 434,
-    },
-    SyscallEntry {
-        name: "pidfd_send_signal",
-        number: 424,
-    },
-    SyscallEntry {
-        name: "pipe2",
-        number: 59,
-    },
-    SyscallEntry {
-        name: "pivot_root",
-        number: 41,
-    },
-    SyscallEntry {
-        name: "pkey_alloc",
-        number: 289,
-    },
-    SyscallEntry {
-        name: "pkey_free",
-        number: 290,
-    },
-    SyscallEntry {
-        name: "pkey_mprotect",
-        number: 288,
-    },
-    SyscallEntry {
-        name: "ppoll",
-        number: 73,
-    },
-    SyscallEntry {
-        name: "prctl",
-        number: 167,
-    },
-    SyscallEntry {
-        name: "pread64",
-        number: 67,
-    },
-    SyscallEntry {
-        name: "preadv",
-        number: 69,
-    },
-    SyscallEntry {
-        name: "preadv2",
-        number: 286,
-    },
-    SyscallEntry {
-        name: "prlimit64",
-        number: 261,
-    },
-    SyscallEntry {
-        name: "process_madvise",
-        number: 440,
-    },
-    SyscallEntry {
-        name: "process_mrelease",
-        number: 448,
-    },
-    SyscallEntry {
-        name: "process_vm_readv",
-        number: 270,
-    },
-    SyscallEntry {
-        name: "process_vm_writev",
-        number: 271,
-    },
-    SyscallEntry {
-        name: "pselect6",
-        number: 72,
-    },
-    SyscallEntry {
-        name: "ptrace",
-        number: 117,
-    },
-    SyscallEntry {
-        name: "pwrite64",
-        number: 68,
-    },
-    SyscallEntry {
-        name: "pwritev",
-        number: 70,
-    },
-    SyscallEntry {
-        name: "pwritev2",
-        number: 287,
-    },
-    SyscallEntry {
-        name: "quotactl",
-        number: 60,
-    },
-    SyscallEntry {
-        name: "quotactl_fd",
-        number: 443,
-    },
-    SyscallEntry {
-        name: "read",
-        number: 63,
-    },
-    SyscallEntry {
-        name: "readahead",
-        number: 213,
-    },
-    SyscallEntry {
-        name: "readlinkat",
-        number: 78,
-    },
-    SyscallEntry {
-        name: "readv",
-        number: 65,
-    },
-    SyscallEntry {
-        name: "reboot",
-        number: 142,
-    },
-    SyscallEntry {
-        name: "recvfrom",
-        number: 207,
-    },
-    SyscallEntry {
-        name: "recvmmsg",
-        number: 243,
-    },
-    SyscallEntry {
-        name: "recvmsg",
-        number: 212,
-    },
-    SyscallEntry {
-        name: "remap_file_pages",
-        number: 234,
-    },
-    SyscallEntry {
-        name: "removexattr",
-        number: 14,
-    },
-    SyscallEntry {
-        name: "renameat2",
-        number: 276,
-    },
-    SyscallEntry {
-        name: "request_key",
-        number: 218,
-    },
-    SyscallEntry {
-        name: "restart_syscall",
-        number: 128,
-    },
-    SyscallEntry {
-        name: "rseq",
-        number: 293,
-    },
-    SyscallEntry {
-        name: "rt_sigaction",
-        number: 134,
-    },
-    SyscallEntry {
-        name: "rt_sigpending",
-        number: 136,
-    },
-    SyscallEntry {
-        name: "rt_sigprocmask",
-        number: 135,
-    },
-    SyscallEntry {
-        name: "rt_sigqueueinfo",
-        number: 138,
-    },
-    SyscallEntry {
-        name: "rt_sigreturn",
-        number: 139,
-    },
-    SyscallEntry {
-        name: "rt_sigsuspend",
-        number: 133,
-    },
-    SyscallEntry {
-        name: "rt_sigtimedwait",
-        number: 137,
-    },
-    SyscallEntry {
-        name: "rt_tgsigqueueinfo",
-        number: 240,
-    },
-    SyscallEntry {
-        name: "sched_get_priority_max",
-        number: 125,
-    },
-    SyscallEntry {
-        name: "sched_get_priority_min",
-        number: 126,
-    },
-    SyscallEntry {
-        name: "sched_getaffinity",
-        number: 123,
-    },
-    SyscallEntry {
-        name: "sched_getattr",
-        number: 275,
-    },
-    SyscallEntry {
-        name: "sched_getparam",
-        number: 121,
-    },
-    SyscallEntry {
-        name: "sched_getscheduler",
-        number: 120,
-    },
-    SyscallEntry {
-        name: "sched_rr_get_interval",
-        number: 127,
-    },
-    SyscallEntry {
-        name: "sched_setaffinity",
-        number: 122,
-    },
-    SyscallEntry {
-        name: "sched_setattr",
-        number: 274,
-    },
-    SyscallEntry {
-        name: "sched_setparam",
-        number: 118,
-    },
-    SyscallEntry {
-        name: "sched_setscheduler",
-        number: 119,
-    },
-    SyscallEntry {
-        name: "sched_yield",
-        number: 124,
-    },
-    SyscallEntry {
-        name: "seccomp",
-        number: 277,
-    },
-    SyscallEntry {
-        name: "semctl",
-        number: 191,
-    },
-    SyscallEntry {
-        name: "semget",
-        number: 190,
-    },
-    SyscallEntry {
-        name: "semop",
-        number: 193,
-    },
-    SyscallEntry {
-        name: "semtimedop",
-        number: 192,
-    },
-    SyscallEntry {
-        name: "sendmmsg",
-        number: 269,
-    },
-    SyscallEntry {
-        name: "sendmsg",
-        number: 211,
-    },
-    SyscallEntry {
-        name: "sendto",
-        number: 206,
-    },
-    SyscallEntry {
-        name: "set_mempolicy",
-        number: 237,
-    },
-    SyscallEntry {
-        name: "set_mempolicy_home_node",
-        number: 450,
-    },
-    SyscallEntry {
-        name: "set_robust_list",
-        number: 99,
-    },
-    SyscallEntry {
-        name: "set_tid_address",
-        number: 96,
-    },
-    SyscallEntry {
-        name: "setdomainname",
-        number: 162,
-    },
-    SyscallEntry {
-        name: "setfsgid",
-        number: 152,
-    },
-    SyscallEntry {
-        name: "setfsuid",
-        number: 151,
-    },
-    SyscallEntry {
-        name: "setgid",
-        number: 144,
-    },
-    SyscallEntry {
-        name: "setgroups",
-        number: 159,
-    },
-    SyscallEntry {
-        name: "sethostname",
-        number: 161,
-    },
-    SyscallEntry {
-        name: "setitimer",
-        number: 103,
-    },
-    SyscallEntry {
-        name: "setns",
-        number: 268,
-    },
-    SyscallEntry {
-        name: "setpgid",
-        number: 154,
-    },
-    SyscallEntry {
-        name: "setpriority",
-        number: 140,
-    },
-    SyscallEntry {
-        name: "setregid",
-        number: 143,
-    },
-    SyscallEntry {
-        name: "setresgid",
-        number: 149,
-    },
-    SyscallEntry {
-        name: "setresuid",
-        number: 147,
-    },
-    SyscallEntry {
-        name: "setreuid",
-        number: 145,
-    },
-    SyscallEntry {
-        name: "setsid",
-        number: 157,
-    },
-    SyscallEntry {
-        name: "setsockopt",
-        number: 208,
-    },
-    SyscallEntry {
-        name: "settimeofday",
-        number: 170,
-    },
-    SyscallEntry {
-        name: "setuid",
-        number: 146,
-    },
-    SyscallEntry {
-        name: "setxattr",
-        number: 5,
-    },
-    SyscallEntry {
-        name: "shmat",
-        number: 196,
-    },
-    SyscallEntry {
-        name: "shmctl",
-        number: 195,
-    },
-    SyscallEntry {
-        name: "shmdt",
-        number: 197,
-    },
-    SyscallEntry {
-        name: "shmget",
-        number: 194,
-    },
-    SyscallEntry {
-        name: "shutdown",
-        number: 210,
-    },
-    SyscallEntry {
-        name: "sigaltstack",
-        number: 132,
-    },
-    SyscallEntry {
-        name: "signalfd4",
-        number: 74,
-    },
-    SyscallEntry {
-        name: "socket",
-        number: 198,
-    },
-    SyscallEntry {
-        name: "socketpair",
-        number: 199,
-    },
-    SyscallEntry {
-        name: "splice",
-        number: 76,
-    },
-    SyscallEntry {
-        name: "statfs",
-        number: 43,
-    },
-    SyscallEntry {
-        name: "statx",
-        number: 291,
-    },
-    SyscallEntry {
-        name: "swapoff",
-        number: 225,
-    },
-    SyscallEntry {
-        name: "swapon",
-        number: 224,
-    },
-    SyscallEntry {
-        name: "symlinkat",
-        number: 36,
-    },
-    SyscallEntry {
-        name: "sync",
-        number: 81,
-    },
-    SyscallEntry {
-        name: "syncfs",
-        number: 267,
-    },
-    SyscallEntry {
-        name: "sysinfo",
-        number: 179,
-    },
-    SyscallEntry {
-        name: "syslog",
-        number: 116,
-    },
-    SyscallEntry {
-        name: "tee",
-        number: 77,
-    },
-    SyscallEntry {
-        name: "tgkill",
-        number: 131,
-    },
-    SyscallEntry {
-        name: "timer_create",
-        number: 107,
-    },
-    SyscallEntry {
-        name: "timer_delete",
-        number: 111,
-    },
-    SyscallEntry {
-        name: "timer_getoverrun",
-        number: 109,
-    },
-    SyscallEntry {
-        name: "timer_gettime",
-        number: 108,
-    },
-    SyscallEntry {
-        name: "timer_settime",
-        number: 110,
-    },
-    SyscallEntry {
-        name: "timerfd_create",
-        number: 85,
-    },
-    SyscallEntry {
-        name: "timerfd_gettime",
-        number: 87,
-    },
-    SyscallEntry {
-        name: "timerfd_settime",
-        number: 86,
-    },
-    SyscallEntry {
-        name: "times",
-        number: 153,
-    },
-    SyscallEntry {
-        name: "tkill",
-        number: 130,
-    },
-    SyscallEntry {
-        name: "truncate",
-        number: 45,
-    },
-    SyscallEntry {
-        name: "umask",
-        number: 166,
-    },
-    SyscallEntry {
-        name: "umount2",
-        number: 39,
-    },
-    SyscallEntry {
-        name: "uname",
-        number: 160,
-    },
-    SyscallEntry {
-        name: "unlinkat",
-        number: 35,
-    },
-    SyscallEntry {
-        name: "unshare",
-        number: 97,
-    },
-    SyscallEntry {
-        name: "userfaultfd",
-        number: 282,
-    },
-    SyscallEntry {
-        name: "utimensat",
-        number: 88,
-    },
-    SyscallEntry {
-        name: "vhangup",
-        number: 58,
-    },
-    SyscallEntry {
-        name: "vmsplice",
-        number: 75,
-    },
-    SyscallEntry {
-        name: "wait4",
-        number: 260,
-    },
-    SyscallEntry {
-        name: "waitid",
-        number: 95,
-    },
-    SyscallEntry {
-        name: "write",
-        number: 64,
-    },
-    SyscallEntry {
-        name: "writev",
-        number: 66,
-    },
+    SyscallEntry { name: "accept", number: 202 },
+    SyscallEntry { name: "accept4", number: 242 },
+    SyscallEntry { name: "acct", number: 89 },
+    SyscallEntry { name: "add_key", number: 217 },
+    SyscallEntry { name: "adjtimex", number: 171 },
+    SyscallEntry { name: "bind", number: 200 },
+    SyscallEntry { name: "bpf", number: 280 },
+    SyscallEntry { name: "brk", number: 214 },
+    SyscallEntry { name: "capget", number: 90 },
+    SyscallEntry { name: "capset", number: 91 },
+    SyscallEntry { name: "chdir", number: 49 },
+    SyscallEntry { name: "chroot", number: 51 },
+    SyscallEntry { name: "clock_adjtime", number: 266 },
+    SyscallEntry { name: "clock_getres", number: 114 },
+    SyscallEntry { name: "clock_gettime", number: 113 },
+    SyscallEntry { name: "clock_nanosleep", number: 115 },
+    SyscallEntry { name: "clock_settime", number: 112 },
+    SyscallEntry { name: "clone", number: 220 },
+    SyscallEntry { name: "clone3", number: 435 },
+    SyscallEntry { name: "close", number: 57 },
+    SyscallEntry { name: "close_range", number: 436 },
+    SyscallEntry { name: "connect", number: 203 },
+    SyscallEntry { name: "copy_file_range", number: 285 },
+    SyscallEntry { name: "delete_module", number: 106 },
+    SyscallEntry { name: "dup", number: 23 },
+    SyscallEntry { name: "dup3", number: 24 },
+    SyscallEntry { name: "epoll_create1", number: 20 },
+    SyscallEntry { name: "epoll_ctl", number: 21 },
+    SyscallEntry { name: "epoll_pwait", number: 22 },
+    SyscallEntry { name: "epoll_pwait2", number: 441 },
+    SyscallEntry { name: "eventfd2", number: 19 },
+    SyscallEntry { name: "execve", number: 221 },
+    SyscallEntry { name: "execveat", number: 281 },
+    SyscallEntry { name: "exit", number: 93 },
+    SyscallEntry { name: "exit_group", number: 94 },
+    SyscallEntry { name: "faccessat", number: 48 },
+    SyscallEntry { name: "faccessat2", number: 439 },
+    SyscallEntry { name: "fallocate", number: 47 },
+    SyscallEntry { name: "fanotify_init", number: 262 },
+    SyscallEntry { name: "fanotify_mark", number: 263 },
+    SyscallEntry { name: "fchdir", number: 50 },
+    SyscallEntry { name: "fchmod", number: 52 },
+    SyscallEntry { name: "fchmodat", number: 53 },
+    SyscallEntry { name: "fchown", number: 55 },
+    SyscallEntry { name: "fchownat", number: 54 },
+    SyscallEntry { name: "fcntl", number: 25 },
+    SyscallEntry { name: "fdatasync", number: 83 },
+    SyscallEntry { name: "fgetxattr", number: 10 },
+    SyscallEntry { name: "finit_module", number: 273 },
+    SyscallEntry { name: "flistxattr", number: 13 },
+    SyscallEntry { name: "flock", number: 32 },
+    SyscallEntry { name: "fremovexattr", number: 16 },
+    SyscallEntry { name: "fsconfig", number: 431 },
+    SyscallEntry { name: "fsetxattr", number: 7 },
+    SyscallEntry { name: "fsmount", number: 432 },
+    SyscallEntry { name: "fsopen", number: 430 },
+    SyscallEntry { name: "fspick", number: 433 },
+    SyscallEntry { name: "fstat", number: 80 },
+    SyscallEntry { name: "fstatfs", number: 44 },
+    SyscallEntry { name: "fsync", number: 82 },
+    SyscallEntry { name: "ftruncate", number: 46 },
+    SyscallEntry { name: "futex", number: 98 },
+    SyscallEntry { name: "futex_waitv", number: 449 },
+    SyscallEntry { name: "get_mempolicy", number: 236 },
+    SyscallEntry { name: "get_robust_list", number: 100 },
+    SyscallEntry { name: "getcpu", number: 168 },
+    SyscallEntry { name: "getcwd", number: 17 },
+    SyscallEntry { name: "getdents64", number: 61 },
+    SyscallEntry { name: "getegid", number: 177 },
+    SyscallEntry { name: "geteuid", number: 175 },
+    SyscallEntry { name: "getgid", number: 176 },
+    SyscallEntry { name: "getgroups", number: 158 },
+    SyscallEntry { name: "getitimer", number: 102 },
+    SyscallEntry { name: "getpeername", number: 205 },
+    SyscallEntry { name: "getpgid", number: 155 },
+    SyscallEntry { name: "getpid", number: 172 },
+    SyscallEntry { name: "getppid", number: 173 },
+    SyscallEntry { name: "getpriority", number: 141 },
+    SyscallEntry { name: "getrandom", number: 278 },
+    SyscallEntry { name: "getresgid", number: 150 },
+    SyscallEntry { name: "getresuid", number: 148 },
+    SyscallEntry { name: "getrusage", number: 165 },
+    SyscallEntry { name: "getsid", number: 156 },
+    SyscallEntry { name: "getsockname", number: 204 },
+    SyscallEntry { name: "getsockopt", number: 209 },
+    SyscallEntry { name: "gettid", number: 178 },
+    SyscallEntry { name: "gettimeofday", number: 169 },
+    SyscallEntry { name: "getuid", number: 174 },
+    SyscallEntry { name: "getxattr", number: 8 },
+    SyscallEntry { name: "init_module", number: 105 },
+    SyscallEntry { name: "inotify_add_watch", number: 27 },
+    SyscallEntry { name: "inotify_init1", number: 26 },
+    SyscallEntry { name: "inotify_rm_watch", number: 28 },
+    SyscallEntry { name: "io_cancel", number: 3 },
+    SyscallEntry { name: "io_destroy", number: 1 },
+    SyscallEntry { name: "io_getevents", number: 4 },
+    SyscallEntry { name: "io_setup", number: 0 },
+    SyscallEntry { name: "io_submit", number: 2 },
+    SyscallEntry { name: "io_uring_enter", number: 426 },
+    SyscallEntry { name: "io_uring_register", number: 427 },
+    SyscallEntry { name: "io_uring_setup", number: 425 },
+    SyscallEntry { name: "ioctl", number: 29 },
+    SyscallEntry { name: "ioprio_get", number: 31 },
+    SyscallEntry { name: "ioprio_set", number: 30 },
+    SyscallEntry { name: "kcmp", number: 272 },
+    SyscallEntry { name: "kexec_file_load", number: 294 },
+    SyscallEntry { name: "kexec_load", number: 104 },
+    SyscallEntry { name: "keyctl", number: 219 },
+    SyscallEntry { name: "kill", number: 129 },
+    SyscallEntry { name: "landlock_add_rule", number: 445 },
+    SyscallEntry { name: "landlock_create_ruleset", number: 444 },
+    SyscallEntry { name: "landlock_restrict_self", number: 446 },
+    SyscallEntry { name: "lgetxattr", number: 9 },
+    SyscallEntry { name: "linkat", number: 37 },
+    SyscallEntry { name: "listen", number: 201 },
+    SyscallEntry { name: "listxattr", number: 11 },
+    SyscallEntry { name: "llistxattr", number: 12 },
+    SyscallEntry { name: "lookup_dcookie", number: 18 },
+    SyscallEntry { name: "lremovexattr", number: 15 },
+    SyscallEntry { name: "lseek", number: 62 },
+    SyscallEntry { name: "lsetxattr", number: 6 },
+    SyscallEntry { name: "madvise", number: 233 },
+    SyscallEntry { name: "mbind", number: 235 },
+    SyscallEntry { name: "membarrier", number: 283 },
+    SyscallEntry { name: "memfd_create", number: 279 },
+    SyscallEntry { name: "memfd_secret", number: 447 },
+    SyscallEntry { name: "migrate_pages", number: 238 },
+    SyscallEntry { name: "mincore", number: 232 },
+    SyscallEntry { name: "mkdirat", number: 34 },
+    SyscallEntry { name: "mknodat", number: 33 },
+    SyscallEntry { name: "mlock", number: 228 },
+    SyscallEntry { name: "mlock2", number: 284 },
+    SyscallEntry { name: "mlockall", number: 230 },
+    SyscallEntry { name: "mmap", number: 222 },
+    SyscallEntry { name: "mount", number: 40 },
+    SyscallEntry { name: "mount_setattr", number: 442 },
+    SyscallEntry { name: "move_mount", number: 429 },
+    SyscallEntry { name: "move_pages", number: 239 },
+    SyscallEntry { name: "mprotect", number: 226 },
+    SyscallEntry { name: "mq_getsetattr", number: 185 },
+    SyscallEntry { name: "mq_notify", number: 184 },
+    SyscallEntry { name: "mq_open", number: 180 },
+    SyscallEntry { name: "mq_timedreceive", number: 183 },
+    SyscallEntry { name: "mq_timedsend", number: 182 },
+    SyscallEntry { name: "mq_unlink", number: 181 },
+    SyscallEntry { name: "mremap", number: 216 },
+    SyscallEntry { name: "mseal", number: 462 },
+    SyscallEntry { name: "msgctl", number: 187 },
+    SyscallEntry { name: "msgget", number: 186 },
+    SyscallEntry { name: "msgrcv", number: 188 },
+    SyscallEntry { name: "msgsnd", number: 189 },
+    SyscallEntry { name: "msync", number: 227 },
+    SyscallEntry { name: "munlock", number: 229 },
+    SyscallEntry { name: "munlockall", number: 231 },
+    SyscallEntry { name: "munmap", number: 215 },
+    SyscallEntry { name: "name_to_handle_at", number: 264 },
+    SyscallEntry { name: "nanosleep", number: 101 },
+    SyscallEntry { name: "newfstatat", number: 79 },
+    SyscallEntry { name: "nfsservctl", number: 42 },
+    SyscallEntry { name: "open_by_handle_at", number: 265 },
+    SyscallEntry { name: "open_tree", number: 428 },
+    SyscallEntry { name: "openat", number: 56 },
+    SyscallEntry { name: "openat2", number: 437 },
+    SyscallEntry { name: "perf_event_open", number: 241 },
+    SyscallEntry { name: "personality", number: 92 },
+    SyscallEntry { name: "pidfd_getfd", number: 438 },
+    SyscallEntry { name: "pidfd_open", number: 434 },
+    SyscallEntry { name: "pidfd_send_signal", number: 424 },
+    SyscallEntry { name: "pipe2", number: 59 },
+    SyscallEntry { name: "pivot_root", number: 41 },
+    SyscallEntry { name: "pkey_alloc", number: 289 },
+    SyscallEntry { name: "pkey_free", number: 290 },
+    SyscallEntry { name: "pkey_mprotect", number: 288 },
+    SyscallEntry { name: "ppoll", number: 73 },
+    SyscallEntry { name: "prctl", number: 167 },
+    SyscallEntry { name: "pread64", number: 67 },
+    SyscallEntry { name: "preadv", number: 69 },
+    SyscallEntry { name: "preadv2", number: 286 },
+    SyscallEntry { name: "prlimit64", number: 261 },
+    SyscallEntry { name: "process_madvise", number: 440 },
+    SyscallEntry { name: "process_mrelease", number: 448 },
+    SyscallEntry { name: "process_vm_readv", number: 270 },
+    SyscallEntry { name: "process_vm_writev", number: 271 },
+    SyscallEntry { name: "pselect6", number: 72 },
+    SyscallEntry { name: "ptrace", number: 117 },
+    SyscallEntry { name: "pwrite64", number: 68 },
+    SyscallEntry { name: "pwritev", number: 70 },
+    SyscallEntry { name: "pwritev2", number: 287 },
+    SyscallEntry { name: "quotactl", number: 60 },
+    SyscallEntry { name: "quotactl_fd", number: 443 },
+    SyscallEntry { name: "read", number: 63 },
+    SyscallEntry { name: "readahead", number: 213 },
+    SyscallEntry { name: "readlinkat", number: 78 },
+    SyscallEntry { name: "readv", number: 65 },
+    SyscallEntry { name: "reboot", number: 142 },
+    SyscallEntry { name: "recvfrom", number: 207 },
+    SyscallEntry { name: "recvmmsg", number: 243 },
+    SyscallEntry { name: "recvmsg", number: 212 },
+    SyscallEntry { name: "remap_file_pages", number: 234 },
+    SyscallEntry { name: "removexattr", number: 14 },
+    SyscallEntry { name: "renameat2", number: 276 },
+    SyscallEntry { name: "request_key", number: 218 },
+    SyscallEntry { name: "restart_syscall", number: 128 },
+    SyscallEntry { name: "rseq", number: 293 },
+    SyscallEntry { name: "rt_sigaction", number: 134 },
+    SyscallEntry { name: "rt_sigpending", number: 136 },
+    SyscallEntry { name: "rt_sigprocmask", number: 135 },
+    SyscallEntry { name: "rt_sigqueueinfo", number: 138 },
+    SyscallEntry { name: "rt_sigreturn", number: 139 },
+    SyscallEntry { name: "rt_sigsuspend", number: 133 },
+    SyscallEntry { name: "rt_sigtimedwait", number: 137 },
+    SyscallEntry { name: "rt_tgsigqueueinfo", number: 240 },
+    SyscallEntry { name: "sched_get_priority_max", number: 125 },
+    SyscallEntry { name: "sched_get_priority_min", number: 126 },
+    SyscallEntry { name: "sched_getaffinity", number: 123 },
+    SyscallEntry { name: "sched_getattr", number: 275 },
+    SyscallEntry { name: "sched_getparam", number: 121 },
+    SyscallEntry { name: "sched_getscheduler", number: 120 },
+    SyscallEntry { name: "sched_rr_get_interval", number: 127 },
+    SyscallEntry { name: "sched_setaffinity", number: 122 },
+    SyscallEntry { name: "sched_setattr", number: 274 },
+    SyscallEntry { name: "sched_setparam", number: 118 },
+    SyscallEntry { name: "sched_setscheduler", number: 119 },
+    SyscallEntry { name: "sched_yield", number: 124 },
+    SyscallEntry { name: "seccomp", number: 277 },
+    SyscallEntry { name: "semctl", number: 191 },
+    SyscallEntry { name: "semget", number: 190 },
+    SyscallEntry { name: "semop", number: 193 },
+    SyscallEntry { name: "semtimedop", number: 192 },
+    SyscallEntry { name: "sendmmsg", number: 269 },
+    SyscallEntry { name: "sendmsg", number: 211 },
+    SyscallEntry { name: "sendto", number: 206 },
+    SyscallEntry { name: "set_mempolicy", number: 237 },
+    SyscallEntry { name: "set_mempolicy_home_node", number: 450 },
+    SyscallEntry { name: "set_robust_list", number: 99 },
+    SyscallEntry { name: "set_tid_address", number: 96 },
+    SyscallEntry { name: "setdomainname", number: 162 },
+    SyscallEntry { name: "setfsgid", number: 152 },
+    SyscallEntry { name: "setfsuid", number: 151 },
+    SyscallEntry { name: "setgid", number: 144 },
+    SyscallEntry { name: "setgroups", number: 159 },
+    SyscallEntry { name: "sethostname", number: 161 },
+    SyscallEntry { name: "setitimer", number: 103 },
+    SyscallEntry { name: "setns", number: 268 },
+    SyscallEntry { name: "setpgid", number: 154 },
+    SyscallEntry { name: "setpriority", number: 140 },
+    SyscallEntry { name: "setregid", number: 143 },
+    SyscallEntry { name: "setresgid", number: 149 },
+    SyscallEntry { name: "setresuid", number: 147 },
+    SyscallEntry { name: "setreuid", number: 145 },
+    SyscallEntry { name: "setsid", number: 157 },
+    SyscallEntry { name: "setsockopt", number: 208 },
+    SyscallEntry { name: "settimeofday", number: 170 },
+    SyscallEntry { name: "setuid", number: 146 },
+    SyscallEntry { name: "setxattr", number: 5 },
+    SyscallEntry { name: "shmat", number: 196 },
+    SyscallEntry { name: "shmctl", number: 195 },
+    SyscallEntry { name: "shmdt", number: 197 },
+    SyscallEntry { name: "shmget", number: 194 },
+    SyscallEntry { name: "shutdown", number: 210 },
+    SyscallEntry { name: "sigaltstack", number: 132 },
+    SyscallEntry { name: "signalfd4", number: 74 },
+    SyscallEntry { name: "socket", number: 198 },
+    SyscallEntry { name: "socketpair", number: 199 },
+    SyscallEntry { name: "splice", number: 76 },
+    SyscallEntry { name: "statfs", number: 43 },
+    SyscallEntry { name: "statx", number: 291 },
+    SyscallEntry { name: "swapoff", number: 225 },
+    SyscallEntry { name: "swapon", number: 224 },
+    SyscallEntry { name: "symlinkat", number: 36 },
+    SyscallEntry { name: "sync", number: 81 },
+    SyscallEntry { name: "syncfs", number: 267 },
+    SyscallEntry { name: "sysinfo", number: 179 },
+    SyscallEntry { name: "syslog", number: 116 },
+    SyscallEntry { name: "tee", number: 77 },
+    SyscallEntry { name: "tgkill", number: 131 },
+    SyscallEntry { name: "timer_create", number: 107 },
+    SyscallEntry { name: "timer_delete", number: 111 },
+    SyscallEntry { name: "timer_getoverrun", number: 109 },
+    SyscallEntry { name: "timer_gettime", number: 108 },
+    SyscallEntry { name: "timer_settime", number: 110 },
+    SyscallEntry { name: "timerfd_create", number: 85 },
+    SyscallEntry { name: "timerfd_gettime", number: 87 },
+    SyscallEntry { name: "timerfd_settime", number: 86 },
+    SyscallEntry { name: "times", number: 153 },
+    SyscallEntry { name: "tkill", number: 130 },
+    SyscallEntry { name: "truncate", number: 45 },
+    SyscallEntry { name: "umask", number: 166 },
+    SyscallEntry { name: "umount2", number: 39 },
+    SyscallEntry { name: "uname", number: 160 },
+    SyscallEntry { name: "unlinkat", number: 35 },
+    SyscallEntry { name: "unshare", number: 97 },
+    SyscallEntry { name: "userfaultfd", number: 282 },
+    SyscallEntry { name: "utimensat", number: 88 },
+    SyscallEntry { name: "vhangup", number: 58 },
+    SyscallEntry { name: "vmsplice", number: 75 },
+    SyscallEntry { name: "wait4", number: 260 },
+    SyscallEntry { name: "waitid", number: 95 },
+    SyscallEntry { name: "write", number: 64 },
+    SyscallEntry { name: "writev", number: 66 },
 ];
 
 /// Sorted by number.
+#[rustfmt::skip]
 pub(super) const BY_NUMBER: &[SyscallEntry] = &[
-    SyscallEntry {
-        name: "io_setup",
-        number: 0,
-    },
-    SyscallEntry {
-        name: "io_destroy",
-        number: 1,
-    },
-    SyscallEntry {
-        name: "io_submit",
-        number: 2,
-    },
-    SyscallEntry {
-        name: "io_cancel",
-        number: 3,
-    },
-    SyscallEntry {
-        name: "io_getevents",
-        number: 4,
-    },
-    SyscallEntry {
-        name: "setxattr",
-        number: 5,
-    },
-    SyscallEntry {
-        name: "lsetxattr",
-        number: 6,
-    },
-    SyscallEntry {
-        name: "fsetxattr",
-        number: 7,
-    },
-    SyscallEntry {
-        name: "getxattr",
-        number: 8,
-    },
-    SyscallEntry {
-        name: "lgetxattr",
-        number: 9,
-    },
-    SyscallEntry {
-        name: "fgetxattr",
-        number: 10,
-    },
-    SyscallEntry {
-        name: "listxattr",
-        number: 11,
-    },
-    SyscallEntry {
-        name: "llistxattr",
-        number: 12,
-    },
-    SyscallEntry {
-        name: "flistxattr",
-        number: 13,
-    },
-    SyscallEntry {
-        name: "removexattr",
-        number: 14,
-    },
-    SyscallEntry {
-        name: "lremovexattr",
-        number: 15,
-    },
-    SyscallEntry {
-        name: "fremovexattr",
-        number: 16,
-    },
-    SyscallEntry {
-        name: "getcwd",
-        number: 17,
-    },
-    SyscallEntry {
-        name: "lookup_dcookie",
-        number: 18,
-    },
-    SyscallEntry {
-        name: "eventfd2",
-        number: 19,
-    },
-    SyscallEntry {
-        name: "epoll_create1",
-        number: 20,
-    },
-    SyscallEntry {
-        name: "epoll_ctl",
-        number: 21,
-    },
-    SyscallEntry {
-        name: "epoll_pwait",
-        number: 22,
-    },
-    SyscallEntry {
-        name: "dup",
-        number: 23,
-    },
-    SyscallEntry {
-        name: "dup3",
-        number: 24,
-    },
-    SyscallEntry {
-        name: "fcntl",
-        number: 25,
-    },
-    SyscallEntry {
-        name: "inotify_init1",
-        number: 26,
-    },
-    SyscallEntry {
-        name: "inotify_add_watch",
-        number: 27,
-    },
-    SyscallEntry {
-        name: "inotify_rm_watch",
-        number: 28,
-    },
-    SyscallEntry {
-        name: "ioctl",
-        number: 29,
-    },
-    SyscallEntry {
-        name: "ioprio_set",
-        number: 30,
-    },
-    SyscallEntry {
-        name: "ioprio_get",
-        number: 31,
-    },
-    SyscallEntry {
-        name: "flock",
-        number: 32,
-    },
-    SyscallEntry {
-        name: "mknodat",
-        number: 33,
-    },
-    SyscallEntry {
-        name: "mkdirat",
-        number: 34,
-    },
-    SyscallEntry {
-        name: "unlinkat",
-        number: 35,
-    },
-    SyscallEntry {
-        name: "symlinkat",
-        number: 36,
-    },
-    SyscallEntry {
-        name: "linkat",
-        number: 37,
-    },
-    SyscallEntry {
-        name: "umount2",
-        number: 39,
-    },
-    SyscallEntry {
-        name: "mount",
-        number: 40,
-    },
-    SyscallEntry {
-        name: "pivot_root",
-        number: 41,
-    },
-    SyscallEntry {
-        name: "nfsservctl",
-        number: 42,
-    },
-    SyscallEntry {
-        name: "statfs",
-        number: 43,
-    },
-    SyscallEntry {
-        name: "fstatfs",
-        number: 44,
-    },
-    SyscallEntry {
-        name: "truncate",
-        number: 45,
-    },
-    SyscallEntry {
-        name: "ftruncate",
-        number: 46,
-    },
-    SyscallEntry {
-        name: "fallocate",
-        number: 47,
-    },
-    SyscallEntry {
-        name: "faccessat",
-        number: 48,
-    },
-    SyscallEntry {
-        name: "chdir",
-        number: 49,
-    },
-    SyscallEntry {
-        name: "fchdir",
-        number: 50,
-    },
-    SyscallEntry {
-        name: "chroot",
-        number: 51,
-    },
-    SyscallEntry {
-        name: "fchmod",
-        number: 52,
-    },
-    SyscallEntry {
-        name: "fchmodat",
-        number: 53,
-    },
-    SyscallEntry {
-        name: "fchownat",
-        number: 54,
-    },
-    SyscallEntry {
-        name: "fchown",
-        number: 55,
-    },
-    SyscallEntry {
-        name: "openat",
-        number: 56,
-    },
-    SyscallEntry {
-        name: "close",
-        number: 57,
-    },
-    SyscallEntry {
-        name: "vhangup",
-        number: 58,
-    },
-    SyscallEntry {
-        name: "pipe2",
-        number: 59,
-    },
-    SyscallEntry {
-        name: "quotactl",
-        number: 60,
-    },
-    SyscallEntry {
-        name: "getdents64",
-        number: 61,
-    },
-    SyscallEntry {
-        name: "lseek",
-        number: 62,
-    },
-    SyscallEntry {
-        name: "read",
-        number: 63,
-    },
-    SyscallEntry {
-        name: "write",
-        number: 64,
-    },
-    SyscallEntry {
-        name: "readv",
-        number: 65,
-    },
-    SyscallEntry {
-        name: "writev",
-        number: 66,
-    },
-    SyscallEntry {
-        name: "pread64",
-        number: 67,
-    },
-    SyscallEntry {
-        name: "pwrite64",
-        number: 68,
-    },
-    SyscallEntry {
-        name: "preadv",
-        number: 69,
-    },
-    SyscallEntry {
-        name: "pwritev",
-        number: 70,
-    },
-    SyscallEntry {
-        name: "pselect6",
-        number: 72,
-    },
-    SyscallEntry {
-        name: "ppoll",
-        number: 73,
-    },
-    SyscallEntry {
-        name: "signalfd4",
-        number: 74,
-    },
-    SyscallEntry {
-        name: "vmsplice",
-        number: 75,
-    },
-    SyscallEntry {
-        name: "splice",
-        number: 76,
-    },
-    SyscallEntry {
-        name: "tee",
-        number: 77,
-    },
-    SyscallEntry {
-        name: "readlinkat",
-        number: 78,
-    },
-    SyscallEntry {
-        name: "newfstatat",
-        number: 79,
-    },
-    SyscallEntry {
-        name: "fstat",
-        number: 80,
-    },
-    SyscallEntry {
-        name: "sync",
-        number: 81,
-    },
-    SyscallEntry {
-        name: "fsync",
-        number: 82,
-    },
-    SyscallEntry {
-        name: "fdatasync",
-        number: 83,
-    },
-    SyscallEntry {
-        name: "timerfd_create",
-        number: 85,
-    },
-    SyscallEntry {
-        name: "timerfd_settime",
-        number: 86,
-    },
-    SyscallEntry {
-        name: "timerfd_gettime",
-        number: 87,
-    },
-    SyscallEntry {
-        name: "utimensat",
-        number: 88,
-    },
-    SyscallEntry {
-        name: "acct",
-        number: 89,
-    },
-    SyscallEntry {
-        name: "capget",
-        number: 90,
-    },
-    SyscallEntry {
-        name: "capset",
-        number: 91,
-    },
-    SyscallEntry {
-        name: "personality",
-        number: 92,
-    },
-    SyscallEntry {
-        name: "exit",
-        number: 93,
-    },
-    SyscallEntry {
-        name: "exit_group",
-        number: 94,
-    },
-    SyscallEntry {
-        name: "waitid",
-        number: 95,
-    },
-    SyscallEntry {
-        name: "set_tid_address",
-        number: 96,
-    },
-    SyscallEntry {
-        name: "unshare",
-        number: 97,
-    },
-    SyscallEntry {
-        name: "futex",
-        number: 98,
-    },
-    SyscallEntry {
-        name: "set_robust_list",
-        number: 99,
-    },
-    SyscallEntry {
-        name: "get_robust_list",
-        number: 100,
-    },
-    SyscallEntry {
-        name: "nanosleep",
-        number: 101,
-    },
-    SyscallEntry {
-        name: "getitimer",
-        number: 102,
-    },
-    SyscallEntry {
-        name: "setitimer",
-        number: 103,
-    },
-    SyscallEntry {
-        name: "kexec_load",
-        number: 104,
-    },
-    SyscallEntry {
-        name: "init_module",
-        number: 105,
-    },
-    SyscallEntry {
-        name: "delete_module",
-        number: 106,
-    },
-    SyscallEntry {
-        name: "timer_create",
-        number: 107,
-    },
-    SyscallEntry {
-        name: "timer_gettime",
-        number: 108,
-    },
-    SyscallEntry {
-        name: "timer_getoverrun",
-        number: 109,
-    },
-    SyscallEntry {
-        name: "timer_settime",
-        number: 110,
-    },
-    SyscallEntry {
-        name: "timer_delete",
-        number: 111,
-    },
-    SyscallEntry {
-        name: "clock_settime",
-        number: 112,
-    },
-    SyscallEntry {
-        name: "clock_gettime",
-        number: 113,
-    },
-    SyscallEntry {
-        name: "clock_getres",
-        number: 114,
-    },
-    SyscallEntry {
-        name: "clock_nanosleep",
-        number: 115,
-    },
-    SyscallEntry {
-        name: "syslog",
-        number: 116,
-    },
-    SyscallEntry {
-        name: "ptrace",
-        number: 117,
-    },
-    SyscallEntry {
-        name: "sched_setparam",
-        number: 118,
-    },
-    SyscallEntry {
-        name: "sched_setscheduler",
-        number: 119,
-    },
-    SyscallEntry {
-        name: "sched_getscheduler",
-        number: 120,
-    },
-    SyscallEntry {
-        name: "sched_getparam",
-        number: 121,
-    },
-    SyscallEntry {
-        name: "sched_setaffinity",
-        number: 122,
-    },
-    SyscallEntry {
-        name: "sched_getaffinity",
-        number: 123,
-    },
-    SyscallEntry {
-        name: "sched_yield",
-        number: 124,
-    },
-    SyscallEntry {
-        name: "sched_get_priority_max",
-        number: 125,
-    },
-    SyscallEntry {
-        name: "sched_get_priority_min",
-        number: 126,
-    },
-    SyscallEntry {
-        name: "sched_rr_get_interval",
-        number: 127,
-    },
-    SyscallEntry {
-        name: "restart_syscall",
-        number: 128,
-    },
-    SyscallEntry {
-        name: "kill",
-        number: 129,
-    },
-    SyscallEntry {
-        name: "tkill",
-        number: 130,
-    },
-    SyscallEntry {
-        name: "tgkill",
-        number: 131,
-    },
-    SyscallEntry {
-        name: "sigaltstack",
-        number: 132,
-    },
-    SyscallEntry {
-        name: "rt_sigsuspend",
-        number: 133,
-    },
-    SyscallEntry {
-        name: "rt_sigaction",
-        number: 134,
-    },
-    SyscallEntry {
-        name: "rt_sigprocmask",
-        number: 135,
-    },
-    SyscallEntry {
-        name: "rt_sigpending",
-        number: 136,
-    },
-    SyscallEntry {
-        name: "rt_sigtimedwait",
-        number: 137,
-    },
-    SyscallEntry {
-        name: "rt_sigqueueinfo",
-        number: 138,
-    },
-    SyscallEntry {
-        name: "rt_sigreturn",
-        number: 139,
-    },
-    SyscallEntry {
-        name: "setpriority",
-        number: 140,
-    },
-    SyscallEntry {
-        name: "getpriority",
-        number: 141,
-    },
-    SyscallEntry {
-        name: "reboot",
-        number: 142,
-    },
-    SyscallEntry {
-        name: "setregid",
-        number: 143,
-    },
-    SyscallEntry {
-        name: "setgid",
-        number: 144,
-    },
-    SyscallEntry {
-        name: "setreuid",
-        number: 145,
-    },
-    SyscallEntry {
-        name: "setuid",
-        number: 146,
-    },
-    SyscallEntry {
-        name: "setresuid",
-        number: 147,
-    },
-    SyscallEntry {
-        name: "getresuid",
-        number: 148,
-    },
-    SyscallEntry {
-        name: "setresgid",
-        number: 149,
-    },
-    SyscallEntry {
-        name: "getresgid",
-        number: 150,
-    },
-    SyscallEntry {
-        name: "setfsuid",
-        number: 151,
-    },
-    SyscallEntry {
-        name: "setfsgid",
-        number: 152,
-    },
-    SyscallEntry {
-        name: "times",
-        number: 153,
-    },
-    SyscallEntry {
-        name: "setpgid",
-        number: 154,
-    },
-    SyscallEntry {
-        name: "getpgid",
-        number: 155,
-    },
-    SyscallEntry {
-        name: "getsid",
-        number: 156,
-    },
-    SyscallEntry {
-        name: "setsid",
-        number: 157,
-    },
-    SyscallEntry {
-        name: "getgroups",
-        number: 158,
-    },
-    SyscallEntry {
-        name: "setgroups",
-        number: 159,
-    },
-    SyscallEntry {
-        name: "uname",
-        number: 160,
-    },
-    SyscallEntry {
-        name: "sethostname",
-        number: 161,
-    },
-    SyscallEntry {
-        name: "setdomainname",
-        number: 162,
-    },
-    SyscallEntry {
-        name: "getrusage",
-        number: 165,
-    },
-    SyscallEntry {
-        name: "umask",
-        number: 166,
-    },
-    SyscallEntry {
-        name: "prctl",
-        number: 167,
-    },
-    SyscallEntry {
-        name: "getcpu",
-        number: 168,
-    },
-    SyscallEntry {
-        name: "gettimeofday",
-        number: 169,
-    },
-    SyscallEntry {
-        name: "settimeofday",
-        number: 170,
-    },
-    SyscallEntry {
-        name: "adjtimex",
-        number: 171,
-    },
-    SyscallEntry {
-        name: "getpid",
-        number: 172,
-    },
-    SyscallEntry {
-        name: "getppid",
-        number: 173,
-    },
-    SyscallEntry {
-        name: "getuid",
-        number: 174,
-    },
-    SyscallEntry {
-        name: "geteuid",
-        number: 175,
-    },
-    SyscallEntry {
-        name: "getgid",
-        number: 176,
-    },
-    SyscallEntry {
-        name: "getegid",
-        number: 177,
-    },
-    SyscallEntry {
-        name: "gettid",
-        number: 178,
-    },
-    SyscallEntry {
-        name: "sysinfo",
-        number: 179,
-    },
-    SyscallEntry {
-        name: "mq_open",
-        number: 180,
-    },
-    SyscallEntry {
-        name: "mq_unlink",
-        number: 181,
-    },
-    SyscallEntry {
-        name: "mq_timedsend",
-        number: 182,
-    },
-    SyscallEntry {
-        name: "mq_timedreceive",
-        number: 183,
-    },
-    SyscallEntry {
-        name: "mq_notify",
-        number: 184,
-    },
-    SyscallEntry {
-        name: "mq_getsetattr",
-        number: 185,
-    },
-    SyscallEntry {
-        name: "msgget",
-        number: 186,
-    },
-    SyscallEntry {
-        name: "msgctl",
-        number: 187,
-    },
-    SyscallEntry {
-        name: "msgrcv",
-        number: 188,
-    },
-    SyscallEntry {
-        name: "msgsnd",
-        number: 189,
-    },
-    SyscallEntry {
-        name: "semget",
-        number: 190,
-    },
-    SyscallEntry {
-        name: "semctl",
-        number: 191,
-    },
-    SyscallEntry {
-        name: "semtimedop",
-        number: 192,
-    },
-    SyscallEntry {
-        name: "semop",
-        number: 193,
-    },
-    SyscallEntry {
-        name: "shmget",
-        number: 194,
-    },
-    SyscallEntry {
-        name: "shmctl",
-        number: 195,
-    },
-    SyscallEntry {
-        name: "shmat",
-        number: 196,
-    },
-    SyscallEntry {
-        name: "shmdt",
-        number: 197,
-    },
-    SyscallEntry {
-        name: "socket",
-        number: 198,
-    },
-    SyscallEntry {
-        name: "socketpair",
-        number: 199,
-    },
-    SyscallEntry {
-        name: "bind",
-        number: 200,
-    },
-    SyscallEntry {
-        name: "listen",
-        number: 201,
-    },
-    SyscallEntry {
-        name: "accept",
-        number: 202,
-    },
-    SyscallEntry {
-        name: "connect",
-        number: 203,
-    },
-    SyscallEntry {
-        name: "getsockname",
-        number: 204,
-    },
-    SyscallEntry {
-        name: "getpeername",
-        number: 205,
-    },
-    SyscallEntry {
-        name: "sendto",
-        number: 206,
-    },
-    SyscallEntry {
-        name: "recvfrom",
-        number: 207,
-    },
-    SyscallEntry {
-        name: "setsockopt",
-        number: 208,
-    },
-    SyscallEntry {
-        name: "getsockopt",
-        number: 209,
-    },
-    SyscallEntry {
-        name: "shutdown",
-        number: 210,
-    },
-    SyscallEntry {
-        name: "sendmsg",
-        number: 211,
-    },
-    SyscallEntry {
-        name: "recvmsg",
-        number: 212,
-    },
-    SyscallEntry {
-        name: "readahead",
-        number: 213,
-    },
-    SyscallEntry {
-        name: "brk",
-        number: 214,
-    },
-    SyscallEntry {
-        name: "munmap",
-        number: 215,
-    },
-    SyscallEntry {
-        name: "mremap",
-        number: 216,
-    },
-    SyscallEntry {
-        name: "add_key",
-        number: 217,
-    },
-    SyscallEntry {
-        name: "request_key",
-        number: 218,
-    },
-    SyscallEntry {
-        name: "keyctl",
-        number: 219,
-    },
-    SyscallEntry {
-        name: "clone",
-        number: 220,
-    },
-    SyscallEntry {
-        name: "execve",
-        number: 221,
-    },
-    SyscallEntry {
-        name: "mmap",
-        number: 222,
-    },
-    SyscallEntry {
-        name: "swapon",
-        number: 224,
-    },
-    SyscallEntry {
-        name: "swapoff",
-        number: 225,
-    },
-    SyscallEntry {
-        name: "mprotect",
-        number: 226,
-    },
-    SyscallEntry {
-        name: "msync",
-        number: 227,
-    },
-    SyscallEntry {
-        name: "mlock",
-        number: 228,
-    },
-    SyscallEntry {
-        name: "munlock",
-        number: 229,
-    },
-    SyscallEntry {
-        name: "mlockall",
-        number: 230,
-    },
-    SyscallEntry {
-        name: "munlockall",
-        number: 231,
-    },
-    SyscallEntry {
-        name: "mincore",
-        number: 232,
-    },
-    SyscallEntry {
-        name: "madvise",
-        number: 233,
-    },
-    SyscallEntry {
-        name: "remap_file_pages",
-        number: 234,
-    },
-    SyscallEntry {
-        name: "mbind",
-        number: 235,
-    },
-    SyscallEntry {
-        name: "get_mempolicy",
-        number: 236,
-    },
-    SyscallEntry {
-        name: "set_mempolicy",
-        number: 237,
-    },
-    SyscallEntry {
-        name: "migrate_pages",
-        number: 238,
-    },
-    SyscallEntry {
-        name: "move_pages",
-        number: 239,
-    },
-    SyscallEntry {
-        name: "rt_tgsigqueueinfo",
-        number: 240,
-    },
-    SyscallEntry {
-        name: "perf_event_open",
-        number: 241,
-    },
-    SyscallEntry {
-        name: "accept4",
-        number: 242,
-    },
-    SyscallEntry {
-        name: "recvmmsg",
-        number: 243,
-    },
-    SyscallEntry {
-        name: "wait4",
-        number: 260,
-    },
-    SyscallEntry {
-        name: "prlimit64",
-        number: 261,
-    },
-    SyscallEntry {
-        name: "fanotify_init",
-        number: 262,
-    },
-    SyscallEntry {
-        name: "fanotify_mark",
-        number: 263,
-    },
-    SyscallEntry {
-        name: "name_to_handle_at",
-        number: 264,
-    },
-    SyscallEntry {
-        name: "open_by_handle_at",
-        number: 265,
-    },
-    SyscallEntry {
-        name: "clock_adjtime",
-        number: 266,
-    },
-    SyscallEntry {
-        name: "syncfs",
-        number: 267,
-    },
-    SyscallEntry {
-        name: "setns",
-        number: 268,
-    },
-    SyscallEntry {
-        name: "sendmmsg",
-        number: 269,
-    },
-    SyscallEntry {
-        name: "process_vm_readv",
-        number: 270,
-    },
-    SyscallEntry {
-        name: "process_vm_writev",
-        number: 271,
-    },
-    SyscallEntry {
-        name: "kcmp",
-        number: 272,
-    },
-    SyscallEntry {
-        name: "finit_module",
-        number: 273,
-    },
-    SyscallEntry {
-        name: "sched_setattr",
-        number: 274,
-    },
-    SyscallEntry {
-        name: "sched_getattr",
-        number: 275,
-    },
-    SyscallEntry {
-        name: "renameat2",
-        number: 276,
-    },
-    SyscallEntry {
-        name: "seccomp",
-        number: 277,
-    },
-    SyscallEntry {
-        name: "getrandom",
-        number: 278,
-    },
-    SyscallEntry {
-        name: "memfd_create",
-        number: 279,
-    },
-    SyscallEntry {
-        name: "bpf",
-        number: 280,
-    },
-    SyscallEntry {
-        name: "execveat",
-        number: 281,
-    },
-    SyscallEntry {
-        name: "userfaultfd",
-        number: 282,
-    },
-    SyscallEntry {
-        name: "membarrier",
-        number: 283,
-    },
-    SyscallEntry {
-        name: "mlock2",
-        number: 284,
-    },
-    SyscallEntry {
-        name: "copy_file_range",
-        number: 285,
-    },
-    SyscallEntry {
-        name: "preadv2",
-        number: 286,
-    },
-    SyscallEntry {
-        name: "pwritev2",
-        number: 287,
-    },
-    SyscallEntry {
-        name: "pkey_mprotect",
-        number: 288,
-    },
-    SyscallEntry {
-        name: "pkey_alloc",
-        number: 289,
-    },
-    SyscallEntry {
-        name: "pkey_free",
-        number: 290,
-    },
-    SyscallEntry {
-        name: "statx",
-        number: 291,
-    },
-    SyscallEntry {
-        name: "rseq",
-        number: 293,
-    },
-    SyscallEntry {
-        name: "kexec_file_load",
-        number: 294,
-    },
-    SyscallEntry {
-        name: "pidfd_send_signal",
-        number: 424,
-    },
-    SyscallEntry {
-        name: "io_uring_setup",
-        number: 425,
-    },
-    SyscallEntry {
-        name: "io_uring_enter",
-        number: 426,
-    },
-    SyscallEntry {
-        name: "io_uring_register",
-        number: 427,
-    },
-    SyscallEntry {
-        name: "open_tree",
-        number: 428,
-    },
-    SyscallEntry {
-        name: "move_mount",
-        number: 429,
-    },
-    SyscallEntry {
-        name: "fsopen",
-        number: 430,
-    },
-    SyscallEntry {
-        name: "fsconfig",
-        number: 431,
-    },
-    SyscallEntry {
-        name: "fsmount",
-        number: 432,
-    },
-    SyscallEntry {
-        name: "fspick",
-        number: 433,
-    },
-    SyscallEntry {
-        name: "pidfd_open",
-        number: 434,
-    },
-    SyscallEntry {
-        name: "clone3",
-        number: 435,
-    },
-    SyscallEntry {
-        name: "close_range",
-        number: 436,
-    },
-    SyscallEntry {
-        name: "openat2",
-        number: 437,
-    },
-    SyscallEntry {
-        name: "pidfd_getfd",
-        number: 438,
-    },
-    SyscallEntry {
-        name: "faccessat2",
-        number: 439,
-    },
-    SyscallEntry {
-        name: "process_madvise",
-        number: 440,
-    },
-    SyscallEntry {
-        name: "epoll_pwait2",
-        number: 441,
-    },
-    SyscallEntry {
-        name: "mount_setattr",
-        number: 442,
-    },
-    SyscallEntry {
-        name: "quotactl_fd",
-        number: 443,
-    },
-    SyscallEntry {
-        name: "landlock_create_ruleset",
-        number: 444,
-    },
-    SyscallEntry {
-        name: "landlock_add_rule",
-        number: 445,
-    },
-    SyscallEntry {
-        name: "landlock_restrict_self",
-        number: 446,
-    },
-    SyscallEntry {
-        name: "memfd_secret",
-        number: 447,
-    },
-    SyscallEntry {
-        name: "process_mrelease",
-        number: 448,
-    },
-    SyscallEntry {
-        name: "futex_waitv",
-        number: 449,
-    },
-    SyscallEntry {
-        name: "set_mempolicy_home_node",
-        number: 450,
-    },
-    SyscallEntry {
-        name: "mseal",
-        number: 462,
-    },
+    SyscallEntry { name: "io_setup", number: 0 },
+    SyscallEntry { name: "io_destroy", number: 1 },
+    SyscallEntry { name: "io_submit", number: 2 },
+    SyscallEntry { name: "io_cancel", number: 3 },
+    SyscallEntry { name: "io_getevents", number: 4 },
+    SyscallEntry { name: "setxattr", number: 5 },
+    SyscallEntry { name: "lsetxattr", number: 6 },
+    SyscallEntry { name: "fsetxattr", number: 7 },
+    SyscallEntry { name: "getxattr", number: 8 },
+    SyscallEntry { name: "lgetxattr", number: 9 },
+    SyscallEntry { name: "fgetxattr", number: 10 },
+    SyscallEntry { name: "listxattr", number: 11 },
+    SyscallEntry { name: "llistxattr", number: 12 },
+    SyscallEntry { name: "flistxattr", number: 13 },
+    SyscallEntry { name: "removexattr", number: 14 },
+    SyscallEntry { name: "lremovexattr", number: 15 },
+    SyscallEntry { name: "fremovexattr", number: 16 },
+    SyscallEntry { name: "getcwd", number: 17 },
+    SyscallEntry { name: "lookup_dcookie", number: 18 },
+    SyscallEntry { name: "eventfd2", number: 19 },
+    SyscallEntry { name: "epoll_create1", number: 20 },
+    SyscallEntry { name: "epoll_ctl", number: 21 },
+    SyscallEntry { name: "epoll_pwait", number: 22 },
+    SyscallEntry { name: "dup", number: 23 },
+    SyscallEntry { name: "dup3", number: 24 },
+    SyscallEntry { name: "fcntl", number: 25 },
+    SyscallEntry { name: "inotify_init1", number: 26 },
+    SyscallEntry { name: "inotify_add_watch", number: 27 },
+    SyscallEntry { name: "inotify_rm_watch", number: 28 },
+    SyscallEntry { name: "ioctl", number: 29 },
+    SyscallEntry { name: "ioprio_set", number: 30 },
+    SyscallEntry { name: "ioprio_get", number: 31 },
+    SyscallEntry { name: "flock", number: 32 },
+    SyscallEntry { name: "mknodat", number: 33 },
+    SyscallEntry { name: "mkdirat", number: 34 },
+    SyscallEntry { name: "unlinkat", number: 35 },
+    SyscallEntry { name: "symlinkat", number: 36 },
+    SyscallEntry { name: "linkat", number: 37 },
+    SyscallEntry { name: "umount2", number: 39 },
+    SyscallEntry { name: "mount", number: 40 },
+    SyscallEntry { name: "pivot_root", number: 41 },
+    SyscallEntry { name: "nfsservctl", number: 42 },
+    SyscallEntry { name: "statfs", number: 43 },
+    SyscallEntry { name: "fstatfs", number: 44 },
+    SyscallEntry { name: "truncate", number: 45 },
+    SyscallEntry { name: "ftruncate", number: 46 },
+    SyscallEntry { name: "fallocate", number: 47 },
+    SyscallEntry { name: "faccessat", number: 48 },
+    SyscallEntry { name: "chdir", number: 49 },
+    SyscallEntry { name: "fchdir", number: 50 },
+    SyscallEntry { name: "chroot", number: 51 },
+    SyscallEntry { name: "fchmod", number: 52 },
+    SyscallEntry { name: "fchmodat", number: 53 },
+    SyscallEntry { name: "fchownat", number: 54 },
+    SyscallEntry { name: "fchown", number: 55 },
+    SyscallEntry { name: "openat", number: 56 },
+    SyscallEntry { name: "close", number: 57 },
+    SyscallEntry { name: "vhangup", number: 58 },
+    SyscallEntry { name: "pipe2", number: 59 },
+    SyscallEntry { name: "quotactl", number: 60 },
+    SyscallEntry { name: "getdents64", number: 61 },
+    SyscallEntry { name: "lseek", number: 62 },
+    SyscallEntry { name: "read", number: 63 },
+    SyscallEntry { name: "write", number: 64 },
+    SyscallEntry { name: "readv", number: 65 },
+    SyscallEntry { name: "writev", number: 66 },
+    SyscallEntry { name: "pread64", number: 67 },
+    SyscallEntry { name: "pwrite64", number: 68 },
+    SyscallEntry { name: "preadv", number: 69 },
+    SyscallEntry { name: "pwritev", number: 70 },
+    SyscallEntry { name: "pselect6", number: 72 },
+    SyscallEntry { name: "ppoll", number: 73 },
+    SyscallEntry { name: "signalfd4", number: 74 },
+    SyscallEntry { name: "vmsplice", number: 75 },
+    SyscallEntry { name: "splice", number: 76 },
+    SyscallEntry { name: "tee", number: 77 },
+    SyscallEntry { name: "readlinkat", number: 78 },
+    SyscallEntry { name: "newfstatat", number: 79 },
+    SyscallEntry { name: "fstat", number: 80 },
+    SyscallEntry { name: "sync", number: 81 },
+    SyscallEntry { name: "fsync", number: 82 },
+    SyscallEntry { name: "fdatasync", number: 83 },
+    SyscallEntry { name: "timerfd_create", number: 85 },
+    SyscallEntry { name: "timerfd_settime", number: 86 },
+    SyscallEntry { name: "timerfd_gettime", number: 87 },
+    SyscallEntry { name: "utimensat", number: 88 },
+    SyscallEntry { name: "acct", number: 89 },
+    SyscallEntry { name: "capget", number: 90 },
+    SyscallEntry { name: "capset", number: 91 },
+    SyscallEntry { name: "personality", number: 92 },
+    SyscallEntry { name: "exit", number: 93 },
+    SyscallEntry { name: "exit_group", number: 94 },
+    SyscallEntry { name: "waitid", number: 95 },
+    SyscallEntry { name: "set_tid_address", number: 96 },
+    SyscallEntry { name: "unshare", number: 97 },
+    SyscallEntry { name: "futex", number: 98 },
+    SyscallEntry { name: "set_robust_list", number: 99 },
+    SyscallEntry { name: "get_robust_list", number: 100 },
+    SyscallEntry { name: "nanosleep", number: 101 },
+    SyscallEntry { name: "getitimer", number: 102 },
+    SyscallEntry { name: "setitimer", number: 103 },
+    SyscallEntry { name: "kexec_load", number: 104 },
+    SyscallEntry { name: "init_module", number: 105 },
+    SyscallEntry { name: "delete_module", number: 106 },
+    SyscallEntry { name: "timer_create", number: 107 },
+    SyscallEntry { name: "timer_gettime", number: 108 },
+    SyscallEntry { name: "timer_getoverrun", number: 109 },
+    SyscallEntry { name: "timer_settime", number: 110 },
+    SyscallEntry { name: "timer_delete", number: 111 },
+    SyscallEntry { name: "clock_settime", number: 112 },
+    SyscallEntry { name: "clock_gettime", number: 113 },
+    SyscallEntry { name: "clock_getres", number: 114 },
+    SyscallEntry { name: "clock_nanosleep", number: 115 },
+    SyscallEntry { name: "syslog", number: 116 },
+    SyscallEntry { name: "ptrace", number: 117 },
+    SyscallEntry { name: "sched_setparam", number: 118 },
+    SyscallEntry { name: "sched_setscheduler", number: 119 },
+    SyscallEntry { name: "sched_getscheduler", number: 120 },
+    SyscallEntry { name: "sched_getparam", number: 121 },
+    SyscallEntry { name: "sched_setaffinity", number: 122 },
+    SyscallEntry { name: "sched_getaffinity", number: 123 },
+    SyscallEntry { name: "sched_yield", number: 124 },
+    SyscallEntry { name: "sched_get_priority_max", number: 125 },
+    SyscallEntry { name: "sched_get_priority_min", number: 126 },
+    SyscallEntry { name: "sched_rr_get_interval", number: 127 },
+    SyscallEntry { name: "restart_syscall", number: 128 },
+    SyscallEntry { name: "kill", number: 129 },
+    SyscallEntry { name: "tkill", number: 130 },
+    SyscallEntry { name: "tgkill", number: 131 },
+    SyscallEntry { name: "sigaltstack", number: 132 },
+    SyscallEntry { name: "rt_sigsuspend", number: 133 },
+    SyscallEntry { name: "rt_sigaction", number: 134 },
+    SyscallEntry { name: "rt_sigprocmask", number: 135 },
+    SyscallEntry { name: "rt_sigpending", number: 136 },
+    SyscallEntry { name: "rt_sigtimedwait", number: 137 },
+    SyscallEntry { name: "rt_sigqueueinfo", number: 138 },
+    SyscallEntry { name: "rt_sigreturn", number: 139 },
+    SyscallEntry { name: "setpriority", number: 140 },
+    SyscallEntry { name: "getpriority", number: 141 },
+    SyscallEntry { name: "reboot", number: 142 },
+    SyscallEntry { name: "setregid", number: 143 },
+    SyscallEntry { name: "setgid", number: 144 },
+    SyscallEntry { name: "setreuid", number: 145 },
+    SyscallEntry { name: "setuid", number: 146 },
+    SyscallEntry { name: "setresuid", number: 147 },
+    SyscallEntry { name: "getresuid", number: 148 },
+    SyscallEntry { name: "setresgid", number: 149 },
+    SyscallEntry { name: "getresgid", number: 150 },
+    SyscallEntry { name: "setfsuid", number: 151 },
+    SyscallEntry { name: "setfsgid", number: 152 },
+    SyscallEntry { name: "times", number: 153 },
+    SyscallEntry { name: "setpgid", number: 154 },
+    SyscallEntry { name: "getpgid", number: 155 },
+    SyscallEntry { name: "getsid", number: 156 },
+    SyscallEntry { name: "setsid", number: 157 },
+    SyscallEntry { name: "getgroups", number: 158 },
+    SyscallEntry { name: "setgroups", number: 159 },
+    SyscallEntry { name: "uname", number: 160 },
+    SyscallEntry { name: "sethostname", number: 161 },
+    SyscallEntry { name: "setdomainname", number: 162 },
+    SyscallEntry { name: "getrusage", number: 165 },
+    SyscallEntry { name: "umask", number: 166 },
+    SyscallEntry { name: "prctl", number: 167 },
+    SyscallEntry { name: "getcpu", number: 168 },
+    SyscallEntry { name: "gettimeofday", number: 169 },
+    SyscallEntry { name: "settimeofday", number: 170 },
+    SyscallEntry { name: "adjtimex", number: 171 },
+    SyscallEntry { name: "getpid", number: 172 },
+    SyscallEntry { name: "getppid", number: 173 },
+    SyscallEntry { name: "getuid", number: 174 },
+    SyscallEntry { name: "geteuid", number: 175 },
+    SyscallEntry { name: "getgid", number: 176 },
+    SyscallEntry { name: "getegid", number: 177 },
+    SyscallEntry { name: "gettid", number: 178 },
+    SyscallEntry { name: "sysinfo", number: 179 },
+    SyscallEntry { name: "mq_open", number: 180 },
+    SyscallEntry { name: "mq_unlink", number: 181 },
+    SyscallEntry { name: "mq_timedsend", number: 182 },
+    SyscallEntry { name: "mq_timedreceive", number: 183 },
+    SyscallEntry { name: "mq_notify", number: 184 },
+    SyscallEntry { name: "mq_getsetattr", number: 185 },
+    SyscallEntry { name: "msgget", number: 186 },
+    SyscallEntry { name: "msgctl", number: 187 },
+    SyscallEntry { name: "msgrcv", number: 188 },
+    SyscallEntry { name: "msgsnd", number: 189 },
+    SyscallEntry { name: "semget", number: 190 },
+    SyscallEntry { name: "semctl", number: 191 },
+    SyscallEntry { name: "semtimedop", number: 192 },
+    SyscallEntry { name: "semop", number: 193 },
+    SyscallEntry { name: "shmget", number: 194 },
+    SyscallEntry { name: "shmctl", number: 195 },
+    SyscallEntry { name: "shmat", number: 196 },
+    SyscallEntry { name: "shmdt", number: 197 },
+    SyscallEntry { name: "socket", number: 198 },
+    SyscallEntry { name: "socketpair", number: 199 },
+    SyscallEntry { name: "bind", number: 200 },
+    SyscallEntry { name: "listen", number: 201 },
+    SyscallEntry { name: "accept", number: 202 },
+    SyscallEntry { name: "connect", number: 203 },
+    SyscallEntry { name: "getsockname", number: 204 },
+    SyscallEntry { name: "getpeername", number: 205 },
+    SyscallEntry { name: "sendto", number: 206 },
+    SyscallEntry { name: "recvfrom", number: 207 },
+    SyscallEntry { name: "setsockopt", number: 208 },
+    SyscallEntry { name: "getsockopt", number: 209 },
+    SyscallEntry { name: "shutdown", number: 210 },
+    SyscallEntry { name: "sendmsg", number: 211 },
+    SyscallEntry { name: "recvmsg", number: 212 },
+    SyscallEntry { name: "readahead", number: 213 },
+    SyscallEntry { name: "brk", number: 214 },
+    SyscallEntry { name: "munmap", number: 215 },
+    SyscallEntry { name: "mremap", number: 216 },
+    SyscallEntry { name: "add_key", number: 217 },
+    SyscallEntry { name: "request_key", number: 218 },
+    SyscallEntry { name: "keyctl", number: 219 },
+    SyscallEntry { name: "clone", number: 220 },
+    SyscallEntry { name: "execve", number: 221 },
+    SyscallEntry { name: "mmap", number: 222 },
+    SyscallEntry { name: "swapon", number: 224 },
+    SyscallEntry { name: "swapoff", number: 225 },
+    SyscallEntry { name: "mprotect", number: 226 },
+    SyscallEntry { name: "msync", number: 227 },
+    SyscallEntry { name: "mlock", number: 228 },
+    SyscallEntry { name: "munlock", number: 229 },
+    SyscallEntry { name: "mlockall", number: 230 },
+    SyscallEntry { name: "munlockall", number: 231 },
+    SyscallEntry { name: "mincore", number: 232 },
+    SyscallEntry { name: "madvise", number: 233 },
+    SyscallEntry { name: "remap_file_pages", number: 234 },
+    SyscallEntry { name: "mbind", number: 235 },
+    SyscallEntry { name: "get_mempolicy", number: 236 },
+    SyscallEntry { name: "set_mempolicy", number: 237 },
+    SyscallEntry { name: "migrate_pages", number: 238 },
+    SyscallEntry { name: "move_pages", number: 239 },
+    SyscallEntry { name: "rt_tgsigqueueinfo", number: 240 },
+    SyscallEntry { name: "perf_event_open", number: 241 },
+    SyscallEntry { name: "accept4", number: 242 },
+    SyscallEntry { name: "recvmmsg", number: 243 },
+    SyscallEntry { name: "wait4", number: 260 },
+    SyscallEntry { name: "prlimit64", number: 261 },
+    SyscallEntry { name: "fanotify_init", number: 262 },
+    SyscallEntry { name: "fanotify_mark", number: 263 },
+    SyscallEntry { name: "name_to_handle_at", number: 264 },
+    SyscallEntry { name: "open_by_handle_at", number: 265 },
+    SyscallEntry { name: "clock_adjtime", number: 266 },
+    SyscallEntry { name: "syncfs", number: 267 },
+    SyscallEntry { name: "setns", number: 268 },
+    SyscallEntry { name: "sendmmsg", number: 269 },
+    SyscallEntry { name: "process_vm_readv", number: 270 },
+    SyscallEntry { name: "process_vm_writev", number: 271 },
+    SyscallEntry { name: "kcmp", number: 272 },
+    SyscallEntry { name: "finit_module", number: 273 },
+    SyscallEntry { name: "sched_setattr", number: 274 },
+    SyscallEntry { name: "sched_getattr", number: 275 },
+    SyscallEntry { name: "renameat2", number: 276 },
+    SyscallEntry { name: "seccomp", number: 277 },
+    SyscallEntry { name: "getrandom", number: 278 },
+    SyscallEntry { name: "memfd_create", number: 279 },
+    SyscallEntry { name: "bpf", number: 280 },
+    SyscallEntry { name: "execveat", number: 281 },
+    SyscallEntry { name: "userfaultfd", number: 282 },
+    SyscallEntry { name: "membarrier", number: 283 },
+    SyscallEntry { name: "mlock2", number: 284 },
+    SyscallEntry { name: "copy_file_range", number: 285 },
+    SyscallEntry { name: "preadv2", number: 286 },
+    SyscallEntry { name: "pwritev2", number: 287 },
+    SyscallEntry { name: "pkey_mprotect", number: 288 },
+    SyscallEntry { name: "pkey_alloc", number: 289 },
+    SyscallEntry { name: "pkey_free", number: 290 },
+    SyscallEntry { name: "statx", number: 291 },
+    SyscallEntry { name: "rseq", number: 293 },
+    SyscallEntry { name: "kexec_file_load", number: 294 },
+    SyscallEntry { name: "pidfd_send_signal", number: 424 },
+    SyscallEntry { name: "io_uring_setup", number: 425 },
+    SyscallEntry { name: "io_uring_enter", number: 426 },
+    SyscallEntry { name: "io_uring_register", number: 427 },
+    SyscallEntry { name: "open_tree", number: 428 },
+    SyscallEntry { name: "move_mount", number: 429 },
+    SyscallEntry { name: "fsopen", number: 430 },
+    SyscallEntry { name: "fsconfig", number: 431 },
+    SyscallEntry { name: "fsmount", number: 432 },
+    SyscallEntry { name: "fspick", number: 433 },
+    SyscallEntry { name: "pidfd_open", number: 434 },
+    SyscallEntry { name: "clone3", number: 435 },
+    SyscallEntry { name: "close_range", number: 436 },
+    SyscallEntry { name: "openat2", number: 437 },
+    SyscallEntry { name: "pidfd_getfd", number: 438 },
+    SyscallEntry { name: "faccessat2", number: 439 },
+    SyscallEntry { name: "process_madvise", number: 440 },
+    SyscallEntry { name: "epoll_pwait2", number: 441 },
+    SyscallEntry { name: "mount_setattr", number: 442 },
+    SyscallEntry { name: "quotactl_fd", number: 443 },
+    SyscallEntry { name: "landlock_create_ruleset", number: 444 },
+    SyscallEntry { name: "landlock_add_rule", number: 445 },
+    SyscallEntry { name: "landlock_restrict_self", number: 446 },
+    SyscallEntry { name: "memfd_secret", number: 447 },
+    SyscallEntry { name: "process_mrelease", number: 448 },
+    SyscallEntry { name: "futex_waitv", number: 449 },
+    SyscallEntry { name: "set_mempolicy_home_node", number: 450 },
+    SyscallEntry { name: "mseal", number: 462 },
 ];
