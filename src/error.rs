@@ -256,6 +256,30 @@ pub enum SeccompError {
 
     #[error("syscall number does not fit a seccomp comparison: {number}")]
     InvalidSyscallNumber { number: i64 },
+
+    #[error("no syscall captures to merge")]
+    NoCaptures,
+
+    #[error("cannot merge captures from different architectures: {expected:#x} and {found:#x}")]
+    ArchMismatch { expected: u32, found: u32 },
+
+    #[error("--seccomp enforce requires --seccomp-profile")]
+    MissingProfilePath,
+
+    #[error("--seccomp-profile only applies to --seccomp enforce")]
+    ProfileWithoutEnforce,
+
+    #[error("--seccomp-out only applies to --seccomp learn")]
+    CaptureWithoutLearn,
+
+    #[error("invalid seccomp mode: {value}")]
+    InvalidMode { value: String },
+
+    #[error("invalid seccomp action: {value}")]
+    InvalidAction { value: String },
+
+    #[error("invalid syscall order: {value}")]
+    InvalidOrder { value: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
