@@ -12,6 +12,8 @@ move to the next goal.
 - [x] Networking: `none`, `host`, `bridge`, subnet allocation, stale lock recovery.
 - [x] Security: no-new-privs, capability drop, seccomp, user namespace, memfd self-exec.
 - [x] Observability: logs, stats, events, healthcheck, persisted health state.
+- [x] Seccomp: syscall capture through ptrace, profile generation, allowlist enforcement.
+- [ ] Evaluation: attack surface reduction, CVE coverage, false denial and overhead measurement.
 
 ## Global Pass Criteria
 
@@ -247,6 +249,177 @@ sudo scripts/benchmark.sh --iterations 30 --net none --security default --json
 sudo scripts/benchmark.sh --iterations 30 --net bridge --security default --json
 ```
 
+## Goal 13: Reproducible Bundle Bootstrap
+
+Objective: make a fresh clone able to run every test, script and benchmark
+without any untracked local state.
+
+- [x] Narrow `.gitignore` from bare `rootfs/` and `bundle/` to the extracted
+      filesystems only.
+- [x] Track `examples/bundle/config.json`.
+- [x] Implement `scripts/setup-rootfs.sh` with an Alpine version and sha256
+      pinned in `scripts/rootfs.lock`.
+- [x] Add `--check-only` so a script can assert the bundle is present.
+- [x] Document the bootstrap step in the README.
+
+Pass:
+
+```bash
+rm -rf examples/bundle/rootfs
+sudo scripts/setup-rootfs.sh
+scripts/setup-rootfs.sh --check-only
+sudo scripts/e2e.sh
+git status --short
+```
+
+## Goal 14: Deterministic Container Environment
+
+Objective: stop the host environment and runtime chatter from contaminating
+container behaviour and machine-readable output.
+
+- [x] Clear the inherited environment before `execvp` in `container/process.rs`.
+- [x] Clear it on the `crun exec` path in `container_exec.rs` as well.
+- [x] Route library-level `println!` and `eprintln!` through `tracing`, on stderr.
+- [x] Add a root test asserting the container environment equals the bundle's.
+
+Pass:
+
+```bash
+cargo clippy --all-targets --all-features
+FOO=leak sudo -E target/release/crun run --log on envtest examples/bundle
+sudo target/release/crun logs envtest | grep -c FOO   # expects 0
+sudo target/release/crun delete envtest
+```
+
+## Goal 15: Concurrent-Safe State Writes
+
+Objective: keep runtime state readable and correct when hundreds of containers
+and concurrent readers touch it during an experiment.
+
+- [x] Write state through a temporary file plus fsync and rename.
+- [x] Hold an exclusive `flock` across read-modify-write.
+- [x] Stop `refresh_liveness` writing outside the lock.
+- [x] Add a concurrency unit test with parallel writers and readers.
+
+Pass:
+
+```bash
+cargo test state
+sudo scripts/benchmark.sh --iterations 30 --net none --security default --json
+```
+
+## Goal 16: OCI Filesystem Mounts
+
+Objective: run bundles produced by standard OCI tooling.
+
+- [x] Dispatch `mounts[]` by type: bind, proc, sysfs, tmpfs, devpts, mqueue, cgroup.
+- [x] Parse mount options into flags, propagation and filesystem data.
+- [x] Let the bundle's declarations win over the built-in `/proc` and `/dev` setup.
+- [x] Add `/dev/shm`, which PostgreSQL needs, and the `/dev/stdout` family of links.
+- [x] Accept filesystem mounts in config validation without a host source.
+
+Pass:
+
+```bash
+cargo test filesystem
+cargo test spec::config
+sudo target/release/crun run --net none mounts-demo examples/bundle
+sudo target/release/crun delete mounts-demo
+```
+
+## Goal 17: Seccomp Filter and Profile Infrastructure
+
+Objective: build the filter, table and profile machinery the rest of the work
+sits on.
+
+- [x] Extract the BPF primitives into `src/seccomp/bpf.rs` with validation.
+- [x] Generate committed syscall tables for x86_64 and aarch64.
+- [x] Emit profiles in the OCI `linux.seccomp` schema with `crunMetadata`.
+- [x] Compile allowlists, guarding foreign architectures and the x32 ABI.
+- [x] Order the comparison chain by observed frequency.
+- [x] Keep the existing denylist behaviour behind `--security default`.
+
+Pass:
+
+```bash
+cargo test seccomp
+target/release/crun seccomp compile <profile> --json
+```
+
+## Goal 18: Learn and Enforce Modes
+
+Objective: capture what a workload really uses, and run it under nothing else.
+
+- [x] Add `--seccomp off|learn|enforce` with profile, output, action and order flags.
+- [x] Trace with `PTRACE_O_TRACESECCOMP` and follow forks, vforks, clones and threads.
+- [x] Hand the log helper and pty proxy statuses back from the tracer.
+- [x] Write captures to `/run/crun-rs/<id>/syscalls.json`.
+- [x] Add `crun seccomp generate|inspect|compare|compile`.
+- [x] Record the mode, profile and action in state so `crun start` reproduces them.
+
+Pass:
+
+```bash
+sudo cargo test --test root_runtime -- --ignored --nocapture
+sudo target/release/crun run --seccomp learn --seccomp-out /tmp/x.json demo examples/bundle
+sudo target/release/crun seccomp generate --capture /tmp/x.json -o /tmp/x.seccomp.json
+sudo target/release/crun run --seccomp enforce --seccomp-profile /tmp/x.seccomp.json demo2 examples/bundle
+```
+
+## Goal 19: Evaluation Data and Harness
+
+Objective: produce every number the thesis reports.
+
+- [x] Vendor Docker's default profile with its licence and provenance.
+- [x] Read it the way Docker does, honouring capability and architecture gates.
+- [x] Curate `data/cve-syscall-map.json` with disjunctive attack paths.
+- [x] Validate the dataset with `scripts/check-cve-map.py`.
+- [x] Build digest-pinned workload bundles with `scripts/build-workloads.sh`.
+- [x] Measure the arms with `scripts/experiment.sh`.
+- [ ] Run the full corpus and commit the results.
+
+Pass:
+
+```bash
+scripts/check-cve-map.py
+sudo scripts/build-workloads.sh --workload all
+sudo scripts/experiment.sh --workload busybox --arm all --repeat 5 --tag smoke
+jq '.comparison.reduction_vs_baseline' docs/benchmark/data/smoke/busybox.json
+```
+
+## Goal 20: Thesis Reproducibility Package
+
+Objective: regenerate every table with one command.
+
+- [x] Add `scripts/reproduce.sh` with `--tag` and `--quick`.
+- [x] Add `scripts/render-tables.py` producing Markdown and CSV.
+- [x] Write the methodology, threat model, related work and limitations notes.
+- [ ] Commit the final raw results, profiles and tables.
+
+Pass:
+
+```bash
+sudo scripts/reproduce.sh --quick
+ls docs/benchmark/results-*.md
+```
+
+## Goal 21: Extensions
+
+Objective: the work that deepens the evaluation once the core numbers exist.
+
+- [ ] Compare a binary-search filter against the linear chain.
+- [ ] Add an eBPF capture backend behind a feature flag and compare its overhead.
+- [ ] Apply a filter to `crun exec`, which currently runs unconfined.
+- [ ] Give `create` and `start` OCI semantics with a detached container process.
+- [ ] Rename `--net bridge`, which is really per-container veth plus NAT.
+
+Pass:
+
+```bash
+cargo test
+sudo scripts/experiment.sh --workload all --arm all --repeat 30 --tag final
+```
+
 ## Recommended Execution Order
 
 1. Root-required integration test harness.
@@ -261,6 +434,15 @@ sudo scripts/benchmark.sh --iterations 30 --net bridge --security default --json
 10. Trace mode.
 11. Checkpoint/restore research mode.
 12. Benchmark suite polish.
+13. Reproducible bundle bootstrap.
+14. Deterministic container environment.
+15. Concurrent-safe state writes.
+16. OCI filesystem mounts.
+17. Seccomp filter and profile infrastructure.
+18. Learn and enforce modes.
+19. Evaluation data and harness.
+20. Thesis reproducibility package.
+21. Extensions.
 
 ## Codex Goal Template
 
