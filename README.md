@@ -33,6 +33,20 @@ cargo test
 cargo clippy --all-targets --all-features
 ```
 
+## Example bundle
+
+The example root filesystem is not tracked in git. Build it once after cloning,
+before running the root tests, `scripts/e2e.sh`, or `scripts/benchmark.sh`:
+
+```bash
+sudo scripts/setup-rootfs.sh
+scripts/setup-rootfs.sh --check-only
+```
+
+The tarball is pinned by version and sha256 in `scripts/rootfs.lock`, so every
+machine builds the same rootfs. Run as root so ownership and device nodes are
+restored.
+
 ## Benchmark
 
 ```bash

@@ -1,5 +1,9 @@
 /target
 .env
 *.log
-rootfs/
-bundle/
+*.tar
+
+# Extracted root filesystems only. The bundle metadata next to them
+# (config.json, provenance) is tracked so a fresh clone can rebuild them.
+/examples/bundle/rootfs/
+/workloads/*/rootfs/

@@ -1,0 +1,44 @@
+{
+  "ociVersion": "1.0.2",
+  "process": {
+    "args": [
+      "/bin/sh"
+    ],
+    "env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    ],
+    "cwd": "/"
+  },
+  "root": {
+    "path": "rootfs",
+    "readonly": false
+  },
+  "linux": {
+    "namespaces": [
+      {
+        "type": "pid"
+      },
+      {
+        "type": "mount"
+      },
+      {
+        "type": "uts"
+      },
+      {
+        "type": "ipc"
+      },
+      {
+        "type": "network"
+      }
+    ],
+    "resources": {
+      "memory": {
+        "limit": 268435456
+      },
+      "cpu": {
+        "quota": 50000,
+        "period": 100000
+      }
+    }
+  }
+}

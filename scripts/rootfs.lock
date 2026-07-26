@@ -1,0 +1,6 @@
+# Pinned base root filesystem for examples/bundle.
+# Regenerate the checksum with: scripts/setup-rootfs.sh --update-lock --version <v>
+alpine_version=3.21.7
+alpine_arch=x86_64
+alpine_sha256=8cba1ea3e8b500ea986a313d8eecf3d5952a2a0d23a69117bb81c023d9ceac05
+alpine_mirror=https://dl-cdn.alpinelinux.org/alpine
