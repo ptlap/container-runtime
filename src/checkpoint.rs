@@ -48,6 +48,7 @@ pub struct RestoreReport {
 
 pub fn checkpoint(id: &str, options: CheckpointOptions) -> Result<CheckpointReport> {
     let container_state = state::load_current(id)?;
+    reject_running_state(id, &container_state.status)?;
     if container_state.status != ContainerStatus::Running {
         return Err(CheckpointError::ContainerNotRunning { id: id.to_string() }.into());
     }
@@ -94,6 +95,9 @@ pub fn checkpoint(id: &str, options: CheckpointOptions) -> Result<CheckpointRepo
 pub fn restore(id: &str, options: RestoreOptions) -> Result<RestoreReport> {
     validate_checkpoint_id(id)?;
     let container_state = state::load_current(id).ok();
+    if let Some(state) = &container_state {
+        reject_running_state(id, &state.status)?;
+    }
     let criu = detect_criu();
     ensure_criu_available(&criu)?;
 
@@ -260,6 +264,16 @@ fn validate_checkpoint_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+fn reject_running_state(
+    id: &str,
+    status: &ContainerStatus,
+) -> std::result::Result<(), CheckpointError> {
+    if *status == ContainerStatus::Running {
+        return Err(CheckpointError::StateConflict { id: id.to_string() });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +332,20 @@ mod tests {
         ));
 
         assert!(validate_checkpoint_id("demo_01.2-3").is_ok());
+    }
+
+    #[test]
+    fn rejects_running_state_for_checkpoint_and_restore_conflicts() {
+        let error = reject_running_state("demo", &ContainerStatus::Running)
+            .expect_err("running state should conflict");
+        assert_eq!(
+            error,
+            CheckpointError::StateConflict {
+                id: "demo".to_string()
+            }
+        );
+        assert!(reject_running_state("demo", &ContainerStatus::Stopped).is_ok());
+        assert!(reject_running_state("demo", &ContainerStatus::Created).is_ok());
     }
 
     #[test]

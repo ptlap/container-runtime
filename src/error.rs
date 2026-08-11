@@ -353,6 +353,9 @@ pub enum ImageError {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CheckpointError {
+    #[error("container {id} has a conflicting running runtime state")]
+    StateConflict { id: String },
+
     #[error("container {id} is not running")]
     ContainerNotRunning { id: String },
 
