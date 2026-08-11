@@ -27,6 +27,16 @@ impl CgroupConfig {
             }
         }
 
+        if let Some(cpu_quota) = self.cpu_quota {
+            if cpu_quota <= 0 {
+                return Err(CgroupError::InvalidCpuQuota { value: cpu_quota });
+            }
+        }
+        if let Some(cpu_period) = self.cpu_period {
+            if cpu_period == 0 {
+                return Err(CgroupError::InvalidCpuPeriod { value: cpu_period });
+            }
+        }
         if let Some(pids_limit) = self.pids_limit {
             if pids_limit <= 0 {
                 return Err(CgroupError::InvalidPidsLimit { value: pids_limit });
@@ -112,20 +122,28 @@ impl Cgroup {
         let path = root.join(id);
         fs::create_dir_all(&path).context("failed to create container cgroup")?;
 
-        if let Some(memory_limit) = config.memory_limit {
-            fs::write(path.join("memory.max"), memory_limit.to_string())
-                .context("failed to write memory.max")?;
-        }
+        let setup = (|| {
+            if let Some(memory_limit) = config.memory_limit {
+                fs::write(path.join("memory.max"), memory_limit.to_string())
+                    .context("failed to write memory.max")?;
+            }
 
-        if let Some(cpu_quota) = config.cpu_quota {
-            let cpu_period = config.cpu_period.unwrap_or(100_000);
-            fs::write(path.join("cpu.max"), format!("{cpu_quota} {cpu_period}"))
-                .context("failed to write cpu.max")?;
-        }
+            if let Some(cpu_quota) = config.cpu_quota {
+                let cpu_period = config.cpu_period.unwrap_or(100_000);
+                fs::write(path.join("cpu.max"), format!("{cpu_quota} {cpu_period}"))
+                    .context("failed to write cpu.max")?;
+            }
 
-        if let Some(pids_limit) = config.pids_limit {
-            fs::write(path.join("pids.max"), pids_limit.to_string())
-                .context("failed to write pids.max")?;
+            if let Some(pids_limit) = config.pids_limit {
+                fs::write(path.join("pids.max"), pids_limit.to_string())
+                    .context("failed to write pids.max")?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })();
+
+        if let Err(error) = setup {
+            let _ = fs::remove_dir(&path);
+            return Err(error);
         }
 
         Ok(Self { path })

@@ -177,9 +177,10 @@ fn validate_image_name(name: &str) -> std::result::Result<(), ImageError> {
         return Err(ImageError::EmptyImageName);
     }
 
-    if !name
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    if matches!(name, "." | "..")
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Err(ImageError::InvalidImageName);
     }
@@ -207,6 +208,14 @@ mod tests {
         );
         assert_eq!(
             validate_image_name("alpine latest").unwrap_err(),
+            ImageError::InvalidImageName
+        );
+        assert_eq!(
+            validate_image_name(".").unwrap_err(),
+            ImageError::InvalidImageName
+        );
+        assert_eq!(
+            validate_image_name("..").unwrap_err(),
             ImageError::InvalidImageName
         );
         assert!(validate_image_name("alpine_3.19-1").is_ok());

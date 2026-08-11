@@ -776,6 +776,12 @@ fn create_container(options: RunOptions) -> Result<()> {
 
 fn start_container(id: &str) -> Result<()> {
     let state = lifecycle::load_created(id)?;
+    if state.schema_version != container_runtime::state::STATE_SCHEMA_VERSION {
+        bail!(
+            "container state schema {} cannot be started by this runtime; recreate the container",
+            state.schema_version
+        );
+    }
 
     let seccomp = seccomp_options_from_state(&state)?;
     let options = RunOptions {
@@ -784,7 +790,7 @@ fn start_container(id: &str) -> Result<()> {
         network_mode: parse_network_mode(&state.network_mode)?,
         security_profile: parse_security_profile(&state.security_profile)?,
         log_mode: parse_log_mode(&state.log_mode)?,
-        userns_mode: parse_userns_mode(&state.userns_mode)?,
+        userns_mode: parse_userns_mode(&state.userns_mode, state.userns_map)?,
         tty: state.tty,
         seccomp,
     };
@@ -852,17 +858,22 @@ fn seccomp_options_from_state(state: &ContainerState) -> Result<SeccompOptions> 
         state.seccomp_profile.as_deref().map(PathBuf::from),
         None,
         action,
-        SyscallOrder::ByFrequency,
-        false,
+        seccomp::parse_order(&state.seccomp_order)?,
+        state.seccomp_log,
         &default_capture,
     )
     .map_err(Into::into)
 }
 
-fn parse_userns_mode(value: &str) -> Result<UserNamespaceMode> {
+fn parse_userns_mode(
+    value: &str,
+    persisted_map: Option<UserNamespaceMap>,
+) -> Result<UserNamespaceMode> {
     match value {
         "host" => Ok(UserNamespaceMode::Host),
-        "private" => Ok(UserNamespaceMode::Private(invoking_user_map()?)),
+        "private" => persisted_map
+            .map(UserNamespaceMode::Private)
+            .ok_or_else(|| anyhow::anyhow!("private user namespace state has no persisted UID/GID mapping; recreate the container")),
         _ => bail!("invalid user namespace mode in state: {value}"),
     }
 }

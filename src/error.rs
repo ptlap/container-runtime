@@ -106,6 +106,9 @@ pub enum OciConfigError {
 
     #[error("linux masked/readonly path must not escape root: {path}")]
     LinuxPathEscapesRoot { path: String },
+
+    #[error("unsupported Linux namespace type: {namespace_type}")]
+    UnsupportedNamespace { namespace_type: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -115,6 +118,12 @@ pub enum CgroupError {
 
     #[error("pids_limit must be greater than zero, got {value}")]
     InvalidPidsLimit { value: i64 },
+
+    #[error("cpu_quota must be greater than zero, got {value}")]
+    InvalidCpuQuota { value: i64 },
+
+    #[error("cpu_period must be greater than zero, got {value}")]
+    InvalidCpuPeriod { value: u64 },
 
     #[error("container {id} is not running")]
     ContainerNotRunning { id: String },
@@ -136,6 +145,9 @@ pub enum HealthcheckError {
 
     #[error("healthcheck {kind} must include a command")]
     MissingCommand { kind: &'static str },
+
+    #[error("healthcheck timeout is invalid: {value}")]
+    InvalidTimeout { value: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -280,6 +292,9 @@ pub enum SeccompError {
 
     #[error("invalid syscall order: {value}")]
     InvalidOrder { value: String },
+
+    #[error("unsupported conditional seccomp rule for syscall(s): {syscalls}")]
+    UnsupportedConditionalRule { syscalls: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

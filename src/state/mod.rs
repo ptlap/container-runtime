@@ -1,5 +1,6 @@
 use crate::error::StateError;
-use crate::network::release_bridge_network;
+use crate::network::{cleanup_nat_lease, release_bridge_network, NatLease};
+use crate::userns::UserNamespaceMap;
 use anyhow::{Context, Result};
 use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 pub const DEFAULT_STATE_ROOT: &str = "/run/crun-rs";
-pub const STATE_SCHEMA_VERSION: u32 = 2;
+pub const STATE_SCHEMA_VERSION: u32 = 4;
 
 const STATE_LOCK_FILE: &str = "state.lock";
 
@@ -29,6 +30,9 @@ pub struct ContainerState {
     pub schema_version: u32,
     pub id: String,
     pub pid: Option<i32>,
+    /// `/proc/<pid>/stat` starttime ticks, paired with pid to prevent PID reuse.
+    #[serde(default)]
+    pub process_starttime: Option<u64>,
     pub status: ContainerStatus,
     pub bundle: String,
     pub cgroup_path: Option<String>,
@@ -37,6 +41,8 @@ pub struct ContainerState {
     #[serde(default)]
     pub network_subnet: Option<String>,
     #[serde(default)]
+    pub nat_lease: Option<NatLease>,
+    #[serde(default)]
     pub log_path: Option<String>,
     #[serde(default = "default_log_mode")]
     pub log_mode: String,
@@ -44,6 +50,8 @@ pub struct ContainerState {
     pub security_profile: String,
     #[serde(default = "default_userns_mode")]
     pub userns_mode: String,
+    #[serde(default)]
+    pub userns_map: Option<UserNamespaceMap>,
     #[serde(default = "default_rootfs_mode")]
     pub rootfs_mode: String,
     #[serde(default = "default_policy_profile")]
@@ -54,6 +62,10 @@ pub struct ContainerState {
     pub seccomp_profile: Option<String>,
     #[serde(default)]
     pub seccomp_action: Option<String>,
+    #[serde(default = "default_seccomp_order")]
+    pub seccomp_order: String,
+    #[serde(default)]
+    pub seccomp_log: bool,
     #[serde(default)]
     pub tty: bool,
     #[serde(default)]
@@ -77,6 +89,7 @@ pub struct HealthState {
 pub struct StartedResources<'a> {
     pub cgroup_path: Option<Cow<'a, str>>,
     pub network_subnet: Option<Cow<'a, str>>,
+    pub nat_lease: Option<NatLease>,
     pub log_path: Option<Cow<'a, str>>,
 }
 
@@ -86,12 +99,15 @@ pub struct RuntimeMetadata<'a> {
     pub security_profile: &'a str,
     pub log_mode: &'a str,
     pub userns_mode: &'a str,
+    pub userns_map: Option<UserNamespaceMap>,
     pub rootfs_mode: &'a str,
     pub policy_profile: &'a str,
     pub tty: bool,
     pub seccomp_mode: &'a str,
     pub seccomp_profile: Option<&'a str>,
     pub seccomp_action: Option<&'a str>,
+    pub seccomp_order: &'a str,
+    pub seccomp_log: bool,
 }
 
 impl ContainerState {
@@ -103,20 +119,25 @@ impl ContainerState {
             schema_version: STATE_SCHEMA_VERSION,
             id: id.to_string(),
             pid: None,
+            process_starttime: None,
             status: ContainerStatus::Created,
             bundle: bundle.display().to_string(),
             cgroup_path: None,
             network_mode: metadata.network_mode.to_string(),
             network_subnet: None,
+            nat_lease: None,
             log_path: Some(log_file(id).display().to_string()),
             log_mode: metadata.log_mode.to_string(),
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
+            userns_map: metadata.userns_map,
             rootfs_mode: metadata.rootfs_mode.to_string(),
             policy_profile: metadata.policy_profile.to_string(),
             seccomp_mode: metadata.seccomp_mode.to_string(),
             seccomp_profile: metadata.seccomp_profile.map(str::to_string),
             seccomp_action: metadata.seccomp_action.map(str::to_string),
+            seccomp_order: metadata.seccomp_order.to_string(),
+            seccomp_log: metadata.seccomp_log,
             tty: metadata.tty,
             health: None,
             created_at_unix: now,
@@ -140,20 +161,25 @@ impl ContainerState {
             schema_version: STATE_SCHEMA_VERSION,
             id: id.to_string(),
             pid: Some(pid),
+            process_starttime: process_starttime(pid).ok(),
             status: ContainerStatus::Running,
             bundle: bundle.display().to_string(),
             cgroup_path: resources.cgroup_path.map(Cow::into_owned),
             network_mode: metadata.network_mode.to_string(),
             network_subnet: resources.network_subnet.map(Cow::into_owned),
+            nat_lease: resources.nat_lease,
             log_path: resources.log_path.map(Cow::into_owned),
             log_mode: metadata.log_mode.to_string(),
             security_profile: metadata.security_profile.to_string(),
             userns_mode: metadata.userns_mode.to_string(),
+            userns_map: metadata.userns_map,
             rootfs_mode: metadata.rootfs_mode.to_string(),
             policy_profile: metadata.policy_profile.to_string(),
             seccomp_mode: metadata.seccomp_mode.to_string(),
             seccomp_profile: metadata.seccomp_profile.map(str::to_string),
             seccomp_action: metadata.seccomp_action.map(str::to_string),
+            seccomp_order: metadata.seccomp_order.to_string(),
+            seccomp_log: metadata.seccomp_log,
             tty: metadata.tty,
             health: None,
             created_at_unix: now,
@@ -170,9 +196,11 @@ impl ContainerState {
         log_mode: &str,
     ) -> Result<()> {
         self.pid = Some(pid);
+        self.process_starttime = Some(process_starttime(pid)?);
         self.status = ContainerStatus::Running;
         self.cgroup_path = resources.cgroup_path.map(Cow::into_owned);
         self.network_subnet = resources.network_subnet.map(Cow::into_owned);
+        self.nat_lease = resources.nat_lease;
         self.log_path = resources.log_path.map(Cow::into_owned);
         self.log_mode = log_mode.to_string();
         self.updated_at_unix = unix_timestamp()?;
@@ -191,10 +219,12 @@ impl ContainerState {
     /// so that `crun logs` can read container output after the container exits.
     pub fn mark_stopped(&mut self, exit_code: Option<i32>, signal: Option<String>) -> Result<()> {
         self.pid = None;
+        self.process_starttime = None;
         self.status = ContainerStatus::Stopped;
         self.updated_at_unix = unix_timestamp()?;
         self.cgroup_path = None;
         self.network_subnet = None;
+        self.nat_lease = None;
         self.exit_code = exit_code;
         self.signal = signal;
         Ok(())
@@ -221,6 +251,10 @@ fn default_security_profile() -> String {
 
 fn default_userns_mode() -> String {
     "host".to_string()
+}
+
+fn default_seccomp_order() -> String {
+    "by-frequency".to_string()
 }
 
 fn default_rootfs_mode() -> String {
@@ -357,18 +391,37 @@ fn refresh_liveness(state: &mut ContainerState) -> Result<bool> {
         return Ok(false);
     }
 
-    if state.pid.is_some_and(pid_is_alive) {
+    let Some(pid) = state.pid else {
         return Ok(false);
+    };
+
+    if pid_is_alive(pid) {
+        match state.process_starttime {
+            Some(expected) if process_starttime(pid).ok() == Some(expected) => {
+                return Ok(false);
+            }
+            Some(_) => {
+                cleanup_stale_resources(state, false);
+                release_state_network_allocation(state);
+                state.mark_stopped(None, Some("STALE_PID_REUSED".to_string()))?;
+            }
+            None => {
+                cleanup_stale_resources(state, false);
+                release_state_network_allocation(state);
+                state.mark_stopped(None, Some("STALE_IDENTITY_MISSING".to_string()))?;
+            }
+        }
+        return Ok(true);
     }
 
-    cleanup_stale_resources(state);
+    cleanup_stale_resources(state, true);
     release_state_network_allocation(state);
     state.mark_stopped(None, Some("STALE".to_string()))?;
 
     Ok(true)
 }
 
-fn cleanup_stale_resources(state: &ContainerState) {
+fn cleanup_stale_resources(state: &ContainerState, pid_identity_owned: bool) {
     if let Some(cgroup_path) = &state.cgroup_path {
         let path = Path::new(cgroup_path);
         if path.exists() {
@@ -377,14 +430,16 @@ fn cleanup_stale_resources(state: &ContainerState) {
     }
 
     if state.network_mode == "bridge" {
-        if let Some(subnet) = &state.network_subnet {
-            let _ = crate::network::cleanup_nat(subnet);
+        if let Some(lease) = &state.nat_lease {
+            let _ = cleanup_nat_lease(lease);
         }
     }
 
-    if let Some(pid) = state.pid {
-        let host_veth = format!("vethh{pid}");
-        let _ = crate::network::cleanup_veth_host(&host_veth);
+    if pid_identity_owned {
+        if let Some(pid) = state.pid {
+            let host_veth = format!("vethh{pid}");
+            let _ = crate::network::cleanup_veth_host(&host_veth);
+        }
     }
 }
 
@@ -416,6 +471,22 @@ pub fn pid_is_alive(pid: i32) -> bool {
     };
 
     !after_comm.starts_with('Z')
+}
+
+/// Reads field 22 of `/proc/<pid>/stat`, the process starttime in clock ticks.
+pub fn process_starttime(pid: i32) -> Result<u64> {
+    let path = Path::new("/proc").join(pid.to_string()).join("stat");
+    let stat = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read process identity: {}", path.display()))?;
+    let (_, after_comm) = stat
+        .rsplit_once(") ")
+        .context("malformed /proc/<pid>/stat process identity")?;
+    after_comm
+        .split_whitespace()
+        .nth(19)
+        .context("missing process starttime in /proc/<pid>/stat")?
+        .parse()
+        .context("invalid process starttime in /proc/<pid>/stat")
 }
 
 fn save_to(root: &Path, state: &ContainerState) -> Result<()> {
@@ -513,9 +584,10 @@ pub(crate) fn validate_id(id: &str) -> std::result::Result<(), StateError> {
         return Err(StateError::EmptyContainerId);
     }
 
-    if !id
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    if matches!(id, "." | "..")
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Err(StateError::InvalidContainerId);
     }
@@ -543,12 +615,15 @@ mod tests {
                 security_profile: "default",
                 log_mode: "off",
                 userns_mode: "host",
+                userns_map: None,
                 rootfs_mode: "direct",
                 policy_profile: "none",
                 tty: false,
                 seccomp_mode: "off",
                 seccomp_profile: None,
                 seccomp_action: None,
+                seccomp_order: "by-frequency",
+                seccomp_log: false,
             },
         )
         .expect("state should be valid");
@@ -620,6 +695,14 @@ mod tests {
             validate_id("demo one"),
             Err(StateError::InvalidContainerId)
         ));
+        assert!(matches!(
+            validate_id("."),
+            Err(StateError::InvalidContainerId)
+        ));
+        assert!(matches!(
+            validate_id(".."),
+            Err(StateError::InvalidContainerId)
+        ));
         assert!(validate_id("demo_01.2-3").is_ok());
     }
 
@@ -632,12 +715,18 @@ mod tests {
             security_profile: "default",
             log_mode: "on",
             userns_mode: "private",
+            userns_map: Some(UserNamespaceMap {
+                host_uid: 1000,
+                host_gid: 1000,
+            }),
             rootfs_mode: "overlay",
             policy_profile: "restricted",
             tty: false,
             seccomp_mode: "off",
             seccomp_profile: None,
             seccomp_action: None,
+            seccomp_order: "by-frequency",
+            seccomp_log: false,
         };
 
         let mut state = ContainerState::running(
@@ -647,6 +736,7 @@ mod tests {
             StartedResources {
                 cgroup_path: Some(Cow::Borrowed("/sys/fs/cgroup/container-runtime/crun-1234")),
                 network_subnet: None,
+                nat_lease: None,
                 log_path: Some(Cow::Borrowed("/run/crun-rs/demo/container.log")),
             },
             metadata,
@@ -719,12 +809,15 @@ mod tests {
                 security_profile: "default",
                 log_mode: "auto",
                 userns_mode: "host",
+                userns_map: None,
                 rootfs_mode: "direct",
                 policy_profile: "none",
                 tty: false,
                 seccomp_mode: "off",
                 seccomp_profile: None,
                 seccomp_action: None,
+                seccomp_order: "by-frequency",
+                seccomp_log: false,
             },
         )
         .expect("created state should be valid");
@@ -762,12 +855,15 @@ mod tests {
                 security_profile: "default",
                 log_mode: "auto",
                 userns_mode: "host",
+                userns_map: None,
                 rootfs_mode: "direct",
                 policy_profile: "none",
                 tty: false,
                 seccomp_mode: "off",
                 seccomp_profile: None,
                 seccomp_action: None,
+                seccomp_order: "by-frequency",
+                seccomp_log: false,
             },
         )
         .expect("beta state should be valid");
@@ -779,12 +875,15 @@ mod tests {
                 security_profile: "default",
                 log_mode: "auto",
                 userns_mode: "host",
+                userns_map: None,
                 rootfs_mode: "direct",
                 policy_profile: "none",
                 tty: false,
                 seccomp_mode: "off",
                 seccomp_profile: None,
                 seccomp_action: None,
+                seccomp_order: "by-frequency",
+                seccomp_log: false,
             },
         )
         .expect("alpha state should be valid");
@@ -815,6 +914,54 @@ mod tests {
     }
 
     #[test]
+    fn load_current_marks_pid_reuse_as_stale_without_veth_cleanup() {
+        let root =
+            std::env::temp_dir().join(format!("crun-rs-pid-reuse-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let metadata = RuntimeMetadata {
+            network_mode: "none",
+            security_profile: "default",
+            log_mode: "auto",
+            userns_mode: "host",
+            userns_map: None,
+            rootfs_mode: "direct",
+            policy_profile: "none",
+            tty: false,
+            seccomp_mode: "off",
+            seccomp_profile: None,
+            seccomp_action: None,
+            seccomp_order: "by-frequency",
+            seccomp_log: false,
+        };
+        let pid = std::process::id() as i32;
+        let mut state = ContainerState::running(
+            "pid-reuse",
+            Path::new("/tmp/bundle"),
+            pid,
+            StartedResources {
+                cgroup_path: None,
+                network_subnet: None,
+                nat_lease: None,
+                log_path: None,
+            },
+            metadata,
+        )
+        .expect("running state should be valid");
+        state.process_starttime = Some(
+            process_starttime(pid)
+                .expect("current process starttime should be readable")
+                .saturating_add(1),
+        );
+        save_to(&root, &state).expect("state should save");
+
+        let loaded = load_current_from(&root, "pid-reuse").expect("state should refresh");
+        assert_eq!(loaded.status, ContainerStatus::Stopped);
+        assert_eq!(loaded.signal.as_deref(), Some("STALE_PID_REUSED"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn load_current_marks_missing_running_pid_as_stale() {
         let root = std::env::temp_dir().join(format!("crun-rs-stale-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -823,12 +970,15 @@ mod tests {
             security_profile: "default",
             log_mode: "auto",
             userns_mode: "host",
+            userns_map: None,
             rootfs_mode: "direct",
             policy_profile: "none",
             tty: false,
             seccomp_mode: "off",
             seccomp_profile: None,
             seccomp_action: None,
+            seccomp_order: "by-frequency",
+            seccomp_log: false,
         };
 
         let state = ContainerState::running(
@@ -838,6 +988,7 @@ mod tests {
             StartedResources {
                 cgroup_path: Some(Cow::Borrowed("/sys/fs/cgroup/container-runtime/crun-stale")),
                 network_subnet: Some(Cow::Borrowed("10.88.20.0/24")),
+                nat_lease: None,
                 log_path: Some(Cow::Borrowed("/run/crun-rs/stale/container.log")),
             },
             metadata,
@@ -893,6 +1044,6 @@ mod tests {
         let state = stopped_state("versioned");
 
         assert_eq!(state.schema_version, STATE_SCHEMA_VERSION);
-        assert_eq!(STATE_SCHEMA_VERSION, 2);
+        assert_eq!(STATE_SCHEMA_VERSION, 4);
     }
 }

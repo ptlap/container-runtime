@@ -270,6 +270,7 @@ pub struct StartedProcess {
     pub pid: i32,
     pub cgroup_path: Option<PathBuf>,
     pub network_subnet: Option<String>,
+    pub nat_lease: Option<crate::network::NatLease>,
 }
 
 #[cfg(test)]

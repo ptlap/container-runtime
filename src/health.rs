@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::audit_log::{self, AuditEvent};
 use crate::container_exec::{exec_in_container, ExecConfig};
 use crate::error::{HealthRunError, HealthcheckError};
+use crate::modes::parse_security_profile;
 use crate::spec::config::load_config;
 use crate::spec::config::Healthcheck;
 use crate::state::{self, ContainerStatus, HealthState};
@@ -54,6 +55,44 @@ pub fn attempts(healthcheck: &Healthcheck) -> u32 {
     healthcheck.retries.unwrap_or(0).saturating_add(1)
 }
 
+pub fn timeout_duration(healthcheck: &Healthcheck) -> Result<Duration, HealthcheckError> {
+    let Some(raw) = healthcheck.timeout.as_deref() else {
+        return Ok(Duration::from_secs(30));
+    };
+    let raw = raw.trim();
+    let split_at = raw
+        .find(|character: char| !character.is_ascii_digit())
+        .ok_or_else(|| HealthcheckError::InvalidTimeout {
+            value: raw.to_string(),
+        })?;
+    let (number, unit) = raw.split_at(split_at);
+    let number = number
+        .parse::<u64>()
+        .map_err(|_| HealthcheckError::InvalidTimeout {
+            value: raw.to_string(),
+        })?;
+    let multiplier = match unit {
+        "ns" => 1,
+        "us" | "µs" => 1_000,
+        "ms" => 1_000_000,
+        "s" => 1_000_000_000,
+        "m" => 60 * 1_000_000_000,
+        "h" => 60 * 60 * 1_000_000_000,
+        _ => {
+            return Err(HealthcheckError::InvalidTimeout {
+                value: raw.to_string(),
+            })
+        }
+    };
+    let nanos = number
+        .checked_mul(multiplier)
+        .filter(|nanos| *nanos > 0)
+        .ok_or_else(|| HealthcheckError::InvalidTimeout {
+            value: raw.to_string(),
+        })?;
+    Ok(Duration::from_nanos(nanos))
+}
+
 pub fn run_once(id: &str) -> Result<HealthResult> {
     let mut state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
@@ -70,6 +109,8 @@ pub fn run_once(id: &str) -> Result<HealthResult> {
         .as_ref()
         .ok_or(HealthRunError::NoHealthcheckConfigured)?;
     let args = command_args(healthcheck)?;
+    let security_profile = parse_security_profile(&state.security_profile)?;
+    let timeout = timeout_duration(healthcheck)?;
     let max_attempts = attempts(healthcheck);
 
     let mut attempts = 0;
@@ -81,14 +122,15 @@ pub fn run_once(id: &str) -> Result<HealthResult> {
             args: &args,
             env: &config.process.env,
             cwd: config.process.cwd.as_deref(),
+            process_user: config.process.user.as_ref(),
+            security_profile,
             cgroup_path: state.cgroup_path.as_deref(),
             tty: false,
-            // The healthcheck runs unfiltered on purpose: it is the operator's
-            // own probe, not container-controlled code, and confining it would
-            // make a container look unhealthy whenever its profile is narrower
-            // than its probe.
+            // The generated profile is intentionally not installed here, but the
+            // container's base security profile is always preserved by exec.
             seccomp_program: None,
             seccomp_flags: 0,
+            timeout: Some(timeout),
         })?;
 
         let healthy = current_exit.code == Some(0) && current_exit.signal.is_none();
@@ -233,7 +275,30 @@ mod tests {
     }
 
     #[test]
-    fn computes_healthcheck_attempts_from_retries() {
+    fn parses_healthcheck_timeouts() {
+        let healthcheck = Healthcheck {
+            test: vec!["CMD".to_string(), "true".to_string()],
+            interval: None,
+            timeout: Some("250ms".to_string()),
+            retries: None,
+        };
+        assert_eq!(
+            timeout_duration(&healthcheck).expect("timeout should parse"),
+            Duration::from_millis(250)
+        );
+
+        let invalid = Healthcheck {
+            timeout: Some("0s".to_string()),
+            ..healthcheck
+        };
+        assert!(matches!(
+            timeout_duration(&invalid),
+            Err(HealthcheckError::InvalidTimeout { .. })
+        ));
+    }
+
+    #[test]
+    fn hcheck_attempts_from_retries() {
         let default_retries = Healthcheck {
             test: vec!["CMD".to_string(), "true".to_string()],
             interval: None,

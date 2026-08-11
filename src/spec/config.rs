@@ -315,6 +315,17 @@ impl OciConfig {
         }
 
         if let Some(linux) = &self.linux {
+            for namespace in &linux.namespaces {
+                if !matches!(
+                    namespace.namespace_type.as_str(),
+                    "pid" | "mount" | "uts" | "ipc" | "network" | "user"
+                ) {
+                    return Err(OciConfigError::UnsupportedNamespace {
+                        namespace_type: namespace.namespace_type.clone(),
+                    });
+                }
+            }
+
             for path in linux.masked_paths.iter().chain(linux.readonly_paths.iter()) {
                 validate_container_path(path)?;
             }
@@ -681,6 +692,22 @@ mod tests {
             ["/proc/kcore"]
         );
         assert_eq!(config.validation_warnings().len(), 1);
+    }
+
+    #[test]
+    fn rejects_unsupported_namespace_types() {
+        let error = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "linux": { "namespaces": [{"type": "time"}] }
+            }"#,
+        )
+        .expect_err("unsupported namespace should be rejected");
+        assert!(matches!(
+            error,
+            OciConfigError::UnsupportedNamespace { namespace_type } if namespace_type == "time"
+        ));
     }
 
     #[test]

@@ -136,6 +136,23 @@ impl SeccompProfile {
     /// Docker's profile splits its allow list across several entries, some of
     /// which are gated on capabilities the container does not have; only
     /// unconditional `SCMP_ACT_ALLOW` entries count as allowed.
+    /// Rejects OCI rule features this runtime cannot preserve in its allowlist BPF.
+    pub fn validate_supported(&self) -> std::result::Result<(), SeccompError> {
+        let Some(rules) = self.seccomp.syscalls() else {
+            return Ok(());
+        };
+
+        for rule in rules {
+            if rule.args().as_ref().is_some_and(|args| !args.is_empty()) {
+                return Err(SeccompError::UnsupportedConditionalRule {
+                    syscalls: rule.names().join(","),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn allowed_names(&self) -> BTreeSet<String> {
         let Some(rules) = self.seccomp.syscalls() else {
             return BTreeSet::new();
@@ -284,6 +301,26 @@ mod tests {
 
         assert!(decoded.crun_metadata.is_none());
         assert_eq!(decoded.allowed_names().len(), 2);
+    }
+
+    #[test]
+    fn rejects_conditional_rules_before_compilation() {
+        let decoded: SeccompProfile = serde_json::from_str(
+            r#"{
+                "defaultAction": "SCMP_ACT_ERRNO",
+                "syscalls": [{
+                    "names": ["openat"],
+                    "action": "SCMP_ACT_ALLOW",
+                    "args": [{"index": 2, "value": 0, "op": "SCMP_CMP_EQ"}]
+                }]
+            }"#,
+        )
+        .expect("conditional profile should parse");
+
+        assert!(matches!(
+            decoded.validate_supported(),
+            Err(SeccompError::UnsupportedConditionalRule { syscalls }) if syscalls == "openat"
+        ));
     }
 
     #[test]

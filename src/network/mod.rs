@@ -59,6 +59,15 @@ pub struct BridgeNetwork {
     pub gateway: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NatLease {
+    pub subnet: String,
+    pub postrouting_owned: bool,
+    pub forward_source_owned: bool,
+    pub forward_destination_owned: bool,
+    pub previous_ip_forward: Option<String>,
+}
+
 impl BridgeNetwork {
     pub fn for_pid(pid: i32) -> Self {
         let octet = bridge_octet(pid);
@@ -403,39 +412,63 @@ fn run_ip_quiet(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-pub fn setup_nat(subnet: &str) -> Result<()> {
-    fs::write("/proc/sys/net/ipv4/ip_forward", "1").context("failed to enable ipv4 forwarding")?;
+pub fn setup_nat(subnet: &str) -> Result<NatLease> {
+    let previous_ip_forward = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")
+        .ok()
+        .map(|value| value.trim().to_string());
+    if previous_ip_forward.as_deref() != Some("1") {
+        fs::write("/proc/sys/net/ipv4/ip_forward", "1")
+            .context("failed to enable ipv4 forwarding")?;
+    }
 
-    run_iptables_quiet(&[
-        "-t",
-        "nat",
-        "-D",
-        "POSTROUTING",
-        "-s",
-        subnet,
-        "-j",
-        "MASQUERADE",
-    ])
-    .ok();
+    let mut lease = NatLease {
+        subnet: subnet.to_string(),
+        postrouting_owned: false,
+        forward_source_owned: false,
+        forward_destination_owned: false,
+        previous_ip_forward,
+    };
 
-    run_iptables(&[
-        "-t",
-        "nat",
-        "-A",
-        "POSTROUTING",
-        "-s",
-        subnet,
-        "-j",
-        "MASQUERADE",
-    ])?;
+    let setup = (|| {
+        lease.postrouting_owned = ensure_iptables_rule(&[
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-s",
+            subnet,
+            "-j",
+            "MASQUERADE",
+        ])?;
+        lease.forward_source_owned =
+            ensure_iptables_rule(&["-A", "FORWARD", "-s", subnet, "-j", "ACCEPT"])?;
+        lease.forward_destination_owned =
+            ensure_iptables_rule(&["-A", "FORWARD", "-d", subnet, "-j", "ACCEPT"])?;
+        Ok::<(), anyhow::Error>(())
+    })();
 
-    run_iptables_quiet(&["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"]).ok();
-    run_iptables_quiet(&["-D", "FORWARD", "-d", subnet, "-j", "ACCEPT"]).ok();
+    if let Err(error) = setup {
+        cleanup_nat_lease(&lease).ok();
+        return Err(error);
+    }
 
-    run_iptables(&["-A", "FORWARD", "-s", subnet, "-j", "ACCEPT"])?;
-    run_iptables(&["-A", "FORWARD", "-d", subnet, "-j", "ACCEPT"])?;
+    Ok(lease)
+}
 
-    Ok(())
+fn ensure_iptables_rule(add_args: &[&str]) -> Result<bool> {
+    let mut check_args = add_args.to_vec();
+    let action_index = check_args
+        .iter()
+        .position(|arg| *arg == "-A")
+        .context("iptables rule is missing append action")?;
+    check_args[action_index] = "-C";
+
+    if run_iptables_quiet(&check_args).is_ok() {
+        return Ok(false);
+    }
+
+    run_iptables(add_args)?;
+    Ok(true)
 }
 
 fn run_iptables(args: &[&str]) -> Result<()> {
@@ -474,24 +507,44 @@ fn run_iptables_quiet(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-pub fn cleanup_nat(subnet: &str) -> Result<()> {
-    while run_iptables_quiet(&[
-        "-t",
-        "nat",
-        "-D",
-        "POSTROUTING",
-        "-s",
-        subnet,
-        "-j",
-        "MASQUERADE",
-    ])
-    .is_ok()
-    {}
-
-    while run_iptables_quiet(&["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"]).is_ok() {}
-    while run_iptables_quiet(&["-D", "FORWARD", "-d", subnet, "-j", "ACCEPT"]).is_ok() {}
-
+pub fn cleanup_nat_lease(lease: &NatLease) -> Result<()> {
+    if lease.postrouting_owned {
+        run_iptables_quiet(&[
+            "-t",
+            "nat",
+            "-D",
+            "POSTROUTING",
+            "-s",
+            &lease.subnet,
+            "-j",
+            "MASQUERADE",
+        ])?;
+    }
+    if lease.forward_source_owned {
+        run_iptables_quiet(&["-D", "FORWARD", "-s", &lease.subnet, "-j", "ACCEPT"])?;
+    }
+    if lease.forward_destination_owned {
+        run_iptables_quiet(&["-D", "FORWARD", "-d", &lease.subnet, "-j", "ACCEPT"])?;
+    }
+    if let Some(previous) = lease.previous_ip_forward.as_deref() {
+        if previous != "1" {
+            fs::write("/proc/sys/net/ipv4/ip_forward", previous)
+                .context("failed to restore ipv4 forwarding")?;
+        }
+    }
     Ok(())
+}
+
+/// Legacy cleanup for callers without an ownership token. New lifecycle code
+/// must use `cleanup_nat_lease` so pre-existing administrator rules are preserved.
+pub fn cleanup_nat(subnet: &str) -> Result<()> {
+    cleanup_nat_lease(&NatLease {
+        subnet: subnet.to_string(),
+        postrouting_owned: true,
+        forward_source_owned: true,
+        forward_destination_owned: true,
+        previous_ip_forward: None,
+    })
 }
 
 #[cfg(test)]

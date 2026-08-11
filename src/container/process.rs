@@ -5,8 +5,9 @@ use crate::cgroup::Cgroup;
 use crate::error::ContainerError;
 use crate::filesystem::{apply_oci_linux_paths, setup_overlay_rootfs, setup_rootfs, OverlayConfig};
 use crate::network::{
-    allocate_bridge_network, cleanup_nat, cleanup_veth_host, release_bridge_network,
-    setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NetworkMode,
+    allocate_bridge_network, cleanup_nat_lease, cleanup_veth_host, release_bridge_network,
+    setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NatLease,
+    NetworkMode,
 };
 use crate::seccomp::collector::{self, CollectorOptions};
 use crate::seccomp::{Program, SeccompMode, SeccompPlan};
@@ -18,6 +19,7 @@ use nix::fcntl::OFlag;
 use nix::libc;
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
+use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{chdir, close, execvp, fork, pipe2, read, setsid, write, ForkResult};
 use std::ffi::CString;
@@ -246,6 +248,7 @@ struct ParentResources {
     container_id: String,
     cgroup: Option<Cgroup>,
     bridge_network: Option<BridgeNetwork>,
+    nat_lease: Option<NatLease>,
     release_bridge_allocation: bool,
 }
 
@@ -255,31 +258,46 @@ impl ParentResources {
             container_id: container_id.to_string(),
             cgroup: None,
             bridge_network: None,
+            nat_lease: None,
             release_bridge_allocation: false,
         }
     }
 
     fn cleanup(&mut self) -> Result<()> {
+        let mut first_error: Option<anyhow::Error> = None;
         if let Some(network) = self.bridge_network.take() {
-            cleanup_nat(&network.subnet)
-                .with_context(|| format!("failed to cleanup NAT for {}", network.subnet))?;
+            if let Some(lease) = self.nat_lease.take() {
+                if let Err(error) = cleanup_nat_lease(&lease)
+                    .with_context(|| format!("failed to cleanup NAT for {}", network.subnet))
+                {
+                    first_error.get_or_insert(error);
+                }
+            }
             if let Err(error) = cleanup_veth_host(&network.veth.host_name) {
                 warn!("failed to cleanup veth {}: {error}", network.veth.host_name);
+                first_error.get_or_insert(error);
             }
         }
 
         if self.release_bridge_allocation {
-            release_bridge_network(&self.container_id).with_context(|| {
+            if let Err(error) = release_bridge_network(&self.container_id).with_context(|| {
                 format!("failed to release bridge subnet for {}", self.container_id)
-            })?;
+            }) {
+                first_error.get_or_insert(error);
+            }
             self.release_bridge_allocation = false;
         }
 
         if let Some(cgroup) = self.cgroup.take() {
-            cgroup.delete()?;
+            if let Err(error) = cgroup.delete() {
+                first_error.get_or_insert(error);
+            }
         }
 
-        Ok(())
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn cleanup_with_warnings(&mut self) {
@@ -465,13 +483,25 @@ pub fn run_process(
             let mut resources = ParentResources::new(config.id);
 
             if let Some(cgroup_config) = config.cgroup_config {
-                let cgroup = Cgroup::new(&format!("crun-{child_pid}"), &cgroup_config)?;
+                let cgroup = match Cgroup::new(&format!("crun-{child_pid}"), &cgroup_config) {
+                    Ok(cgroup) => cgroup,
+                    Err(error) => {
+                        let _ = kill(child, Signal::SIGKILL);
+                        let _ = waitpid(child, None);
+                        return Err(error);
+                    }
+                };
                 resources.cgroup = Some(cgroup);
-                resources
+                if let Err(error) = resources
                     .cgroup
                     .as_ref()
                     .expect("cgroup was just created")
-                    .add_process(child)?;
+                    .add_process(child)
+                {
+                    let _ = kill(child, Signal::SIGKILL);
+                    let _ = waitpid(child, None);
+                    return Err(error).context("failed to attach container process to cgroup");
+                }
             }
 
             if network_mode == NetworkMode::Bridge {
@@ -483,7 +513,7 @@ pub fn run_process(
                     .as_ref()
                     .expect("bridge network was just created");
                 setup_veth_parent(child, network)?;
-                setup_nat(&network.subnet)?;
+                resources.nat_lease = Some(setup_nat(&network.subnet)?);
             }
 
             on_started(StartedProcess {
@@ -496,6 +526,7 @@ pub fn run_process(
                     .bridge_network
                     .as_ref()
                     .map(|network| network.subnet.clone()),
+                nat_lease: resources.nat_lease.clone(),
             })?;
 
             let signal = resources
@@ -792,7 +823,7 @@ fn apply_rlimits(rlimits: &[LinuxRlimit]) -> Result<()> {
     Ok(())
 }
 
-fn apply_process_user(user: Option<&ProcessUser>) -> Result<()> {
+pub(crate) fn apply_process_user(user: Option<&ProcessUser>) -> Result<()> {
     let Some(user) = user else {
         return Ok(());
     };

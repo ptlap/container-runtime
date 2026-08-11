@@ -1,5 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
+use nix::libc;
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use crate::container::{run_process, ProcessConfig, StartedProcess};
 use crate::container_exec::{exec_in_container, ExecConfig};
 use crate::error::LifecycleError;
 use crate::filesystem::resolve_rootfs;
-use crate::modes::LogMode;
+use crate::modes::{parse_security_profile, LogMode};
 use crate::namespace::effective_namespace_flags;
 use crate::network::NetworkMode;
 use crate::policy;
@@ -21,7 +22,7 @@ use crate::security::SecurityProfile;
 use crate::signal::{parse_signal, send_signal};
 use crate::spec::config::load_config;
 use crate::state::{self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources};
-use crate::userns::UserNamespaceMode;
+use crate::userns::{validate_process_user, UserNamespaceMode};
 use tracing::info;
 
 #[derive(Debug, Clone)]
@@ -86,6 +87,7 @@ pub fn create(options: CreateOptions<'_>) -> Result<ContainerState> {
     ensure_container_absent(options.id)?;
 
     let config = load_config(options.bundle.join("config.json"))?;
+    validate_process_user(options.userns_mode, config.process.user.as_ref())?;
     let effective_policy = policy::resolve_effective_policy(
         config.crun.as_ref(),
         config
@@ -110,12 +112,18 @@ pub fn create(options: CreateOptions<'_>) -> Result<ContainerState> {
             security_profile: effective_policy.security_profile.as_str(),
             log_mode: effective_policy.log_mode.as_str(),
             userns_mode: options.userns_mode.as_str(),
+            userns_map: match options.userns_mode {
+                UserNamespaceMode::Host => None,
+                UserNamespaceMode::Private(map) => Some(map),
+            },
             rootfs_mode: rootfs_mode.as_str(),
             policy_profile: effective_policy.profile.as_str(),
             tty: options.tty,
             seccomp_mode: options.seccomp.mode.as_str(),
             seccomp_profile: seccomp_profile_path.as_deref(),
             seccomp_action: Some(options.seccomp.action.as_str()),
+            seccomp_order: options.seccomp.order.as_str(),
+            seccomp_log: options.seccomp.log,
         },
     )?;
     state::save(&state)?;
@@ -181,16 +189,24 @@ pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
         .ok_or_else(|| LifecycleError::ContainerHasNoPid { id: id.to_string() })?;
     let config = load_config(Path::new(&state.bundle).join("config.json"))?;
     let compiled = exec_seccomp_program(&state)?;
+    let security_profile = parse_security_profile(&state.security_profile)?;
 
     let exit = exec_in_container(ExecConfig {
         target_pid: pid,
         args,
         env: &config.process.env,
         cwd: config.process.cwd.as_deref(),
+        process_user: config.process.user.as_ref(),
+        security_profile,
         cgroup_path: state.cgroup_path.as_deref(),
         tty,
         seccomp_program: compiled.as_ref().map(|compiled| &compiled.program),
-        seccomp_flags: 0,
+        seccomp_flags: if state.seccomp_log {
+            libc::SECCOMP_FILTER_FLAG_LOG
+        } else {
+            0
+        },
+        timeout: None,
     })?;
 
     let report = ExecReport {
@@ -227,7 +243,7 @@ fn exec_seccomp_program(state: &ContainerState) -> Result<Option<seccomp::Compil
         &profile,
         seccomp::CompileOptions {
             default_action: action,
-            order: seccomp::SyscallOrder::ByFrequency,
+            order: seccomp::parse_order(&state.seccomp_order)?,
         },
     )?;
 
@@ -325,6 +341,7 @@ pub fn run_container_process(
 
     let config_path = bundle.join("config.json");
     let config = load_config(&config_path)?;
+    validate_process_user(userns_mode, config.process.user.as_ref())?;
     let effective_policy = policy::resolve_effective_policy(
         config.crun.as_ref(),
         config
@@ -352,7 +369,7 @@ pub fn run_container_process(
         })
         .unwrap_or_default();
 
-    let flags = effective_namespace_flags(&namespaces, network_mode, userns_mode);
+    let flags = effective_namespace_flags(&namespaces, network_mode, userns_mode)?;
 
     // Environment values may carry secrets, so only their count is recorded.
     info!(
@@ -404,6 +421,7 @@ pub fn run_container_process(
         let resources = StartedResources {
             cgroup_path: cgroup_path.as_deref().map(Cow::Borrowed),
             network_subnet: started.network_subnet.as_deref().map(Cow::Borrowed),
+            nat_lease: started.nat_lease.clone(),
             log_path: log_path_string.as_deref().map(Cow::Borrowed),
         };
         let state = if let Some(mut state) = existing_state.take() {
@@ -420,12 +438,18 @@ pub fn run_container_process(
                     security_profile: security_profile.as_str(),
                     log_mode: log_mode.as_str(),
                     userns_mode: userns_mode.as_str(),
+                    userns_map: match userns_mode {
+                        UserNamespaceMode::Host => None,
+                        UserNamespaceMode::Private(map) => Some(map),
+                    },
                     rootfs_mode: rootfs.mode.as_str(),
                     policy_profile: policy_profile.as_str(),
                     tty: options.tty,
                     seccomp_mode: options.seccomp.mode.as_str(),
                     seccomp_profile: seccomp_profile_path.as_deref(),
                     seccomp_action: Some(seccomp_action),
+                    seccomp_order: options.seccomp.order.as_str(),
+                    seccomp_log: options.seccomp.log,
                 },
             )?
         };
