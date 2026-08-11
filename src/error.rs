@@ -218,6 +218,13 @@ pub enum NetworkError {
     #[error("{program} command failed: {args}")]
     CommandFailed { program: &'static str, args: String },
 
+    #[error("{program} command timed out after {timeout_ms}ms: {args}")]
+    CommandTimedOut {
+        program: &'static str,
+        args: String,
+        timeout_ms: u128,
+    },
+
     #[error("timed out waiting for network allocation lock")]
     LockTimeout,
 }
@@ -349,6 +356,9 @@ pub enum ImageError {
 
     #[error("tar extraction failed: {stderr}")]
     TarExtractionFailed { stderr: String },
+
+    #[error("tar extraction timed out after {timeout_ms}ms")]
+    TarCommandTimedOut { timeout_ms: u128 },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -376,6 +386,15 @@ pub enum CheckpointError {
 
     #[error("CRIU command {command} failed: {stderr}")]
     CriuCommandFailed { command: String, stderr: String },
+
+    #[error("CRIU command timed out after {timeout_ms}ms: {command}")]
+    CriuCommandTimedOut { command: String, timeout_ms: u128 },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum DoctorError {
+    #[error("doctor ip command timed out after {timeout_ms}ms: {command}")]
+    CommandTimedOut { command: String, timeout_ms: u128 },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

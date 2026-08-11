@@ -1,3 +1,5 @@
+use crate::command::{self, CommandError, EXTERNAL_COMMAND_TIMEOUT};
+use crate::error::DoctorError;
 use crate::network::{cleanup_veth_host, release_bridge_network};
 use crate::state::{self, ContainerStatus};
 use anyhow::{Context, Result};
@@ -224,10 +226,23 @@ fn check_orphan_veth_links(
     fix: bool,
     issues: &mut Vec<DoctorIssue>,
 ) -> Result<()> {
-    let output = Command::new("ip")
-        .args(["-o", "link", "show"])
-        .output()
-        .context("failed to execute ip -o link show")?;
+    let mut ip = Command::new("ip");
+    ip.args(["-o", "link", "show"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output =
+        command::output(ip, "ip -o link show", EXTERNAL_COMMAND_TIMEOUT).map_err(|error| {
+            match error {
+                CommandError::TimedOut {
+                    command,
+                    timeout_ms,
+                } => anyhow::Error::new(DoctorError::CommandTimedOut {
+                    command,
+                    timeout_ms,
+                }),
+                error => anyhow::Error::new(error),
+            }
+        })?;
     if !output.status.success() {
         return Ok(());
     }

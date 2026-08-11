@@ -1,3 +1,4 @@
+use crate::command::{self, EXTERNAL_COMMAND_TIMEOUT};
 use crate::error::TraceError;
 use crate::state::{self, ContainerStatus};
 use anyhow::{Context, Result};
@@ -194,9 +195,12 @@ fn collect_strace(pid: i32, available: bool, options: TraceOptions) -> Result<St
 
     thread::sleep(options.strace_duration);
     let _ = child.kill();
-    let output = child
-        .wait_with_output()
-        .context("failed to collect strace output")?;
+    let output = command::wait_with_output(
+        child,
+        format!("strace -f -p {pid} -c -qq"),
+        EXTERNAL_COMMAND_TIMEOUT,
+    )
+    .context("failed to collect strace output")?;
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     Ok(StraceReport {
@@ -209,12 +213,14 @@ fn collect_strace(pid: i32, available: bool, options: TraceOptions) -> Result<St
 }
 
 fn command_available(name: &str) -> bool {
-    Command::new(name)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    let mut command = Command::new(name);
+    command.arg("--version");
+    command::status(
+        command,
+        format!("{name} --version"),
+        EXTERNAL_COMMAND_TIMEOUT,
+    )
+    .is_ok_and(|status| status.success())
 }
 
 fn proc_pid_path(pid: i32, child: &str) -> std::path::PathBuf {

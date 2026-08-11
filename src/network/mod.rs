@@ -1,3 +1,4 @@
+use crate::command::{self, CommandError, EXTERNAL_COMMAND_TIMEOUT};
 use crate::error::NetworkError;
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
@@ -5,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
@@ -377,39 +378,11 @@ pub fn cleanup_veth_host(host_name: &str) -> Result<()> {
 }
 
 fn run_ip(args: &[&str]) -> Result<()> {
-    let status = Command::new("ip")
-        .args(args)
-        .status()
-        .with_context(|| format!("failed to execute ip {}", args.join(" ")))?;
-
-    if !status.success() {
-        return Err(NetworkError::CommandFailed {
-            program: "ip",
-            args: args.join(" "),
-        }
-        .into());
-    }
-
-    Ok(())
+    run_network_command("ip", args)
 }
 
 fn run_ip_quiet(args: &[&str]) -> Result<()> {
-    let status = Command::new("ip")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to execute ip {}", args.join(" ")))?;
-
-    if !status.success() {
-        return Err(NetworkError::CommandFailed {
-            program: "ip",
-            args: args.join(" "),
-        }
-        .into());
-    }
-
-    Ok(())
+    run_network_command("ip", args)
 }
 
 pub fn setup_nat(subnet: &str) -> Result<NatLease> {
@@ -472,33 +445,33 @@ fn ensure_iptables_rule(add_args: &[&str]) -> Result<bool> {
 }
 
 fn run_iptables(args: &[&str]) -> Result<()> {
-    let status = Command::new("iptables")
-        .args(args)
-        .status()
-        .with_context(|| format!("failed to execute iptables {}", args.join(" ")))?;
-
-    if !status.success() {
-        return Err(NetworkError::CommandFailed {
-            program: "iptables",
-            args: args.join(" "),
-        }
-        .into());
-    }
-
-    Ok(())
+    run_network_command("iptables", args)
 }
 
 fn run_iptables_quiet(args: &[&str]) -> Result<()> {
-    let status = Command::new("iptables")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to execute iptables {}", args.join(" ")))?;
+    run_network_command("iptables", args)
+}
+
+fn run_network_command(program: &'static str, args: &[&str]) -> Result<()> {
+    let mut command = Command::new(program);
+    command.args(args);
+    let description = format!("{program} {}", args.join(" "));
+    let status = command::status(command, description, EXTERNAL_COMMAND_TIMEOUT).map_err(
+        |error| match error {
+            CommandError::TimedOut { timeout_ms, .. } => {
+                anyhow::Error::new(NetworkError::CommandTimedOut {
+                    program,
+                    args: args.join(" "),
+                    timeout_ms,
+                })
+            }
+            error => anyhow::Error::new(error),
+        },
+    )?;
 
     if !status.success() {
         return Err(NetworkError::CommandFailed {
-            program: "iptables",
+            program,
             args: args.join(" "),
         }
         .into());

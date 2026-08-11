@@ -1,3 +1,4 @@
+use crate::command::{self, CommandError, EXTERNAL_COMMAND_TIMEOUT};
 use crate::error::CheckpointError;
 use crate::spec::config::load_config;
 use crate::state::{self, ContainerStatus, DEFAULT_STATE_ROOT};
@@ -127,12 +128,11 @@ pub fn restore(id: &str, options: RestoreOptions) -> Result<RestoreReport> {
 }
 
 pub fn detect_criu() -> CriuStatus {
-    match Command::new("criu")
-        .arg("--version")
+    let mut criu = Command::new("criu");
+    criu.arg("--version")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-    {
+        .stderr(Stdio::piped());
+    match command::output(criu, "criu --version", EXTERNAL_COMMAND_TIMEOUT) {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             CriuStatus {
@@ -179,12 +179,23 @@ fn run_criu(command: &[String]) -> Result<()> {
     let Some((program, args)) = command.split_first() else {
         return Err(CheckpointError::EmptyCriuCommand.into());
     };
-    let output = Command::new(program)
-        .args(args)
+    let mut criu = Command::new(program);
+    criu.args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .with_context(|| format!("failed to execute {}", command.join(" ")))?;
+        .stderr(Stdio::piped());
+    let description = command.join(" ");
+    let output =
+        command::output(criu, description.clone(), EXTERNAL_COMMAND_TIMEOUT).map_err(|error| {
+            match error {
+                CommandError::TimedOut { timeout_ms, .. } => {
+                    anyhow::Error::new(CheckpointError::CriuCommandTimedOut {
+                        command: description.clone(),
+                        timeout_ms,
+                    })
+                }
+                error => anyhow::Error::new(error),
+            }
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

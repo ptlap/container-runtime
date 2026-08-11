@@ -1,3 +1,4 @@
+use crate::command::{self, CommandError, EXTERNAL_COMMAND_TIMEOUT};
 use crate::error::ImageError;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -105,14 +106,26 @@ fn list_from(root: &Path) -> Result<Vec<ImageInfo>> {
 }
 
 fn extract_rootfs(rootfs_tar: &Path, rootfs: &Path) -> Result<()> {
-    let output = Command::new("tar")
-        .arg("-xf")
+    let mut tar = Command::new("tar");
+    tar.arg("-xf")
         .arg(rootfs_tar)
         .arg("-C")
         .arg(rootfs)
         .arg("--no-same-owner")
-        .output()
-        .context("failed to execute tar")?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = command::output(
+        tar,
+        format!("tar -xf {}", rootfs_tar.display()),
+        EXTERNAL_COMMAND_TIMEOUT,
+    )
+    .map_err(|error| match error {
+        CommandError::TimedOut { timeout_ms, .. } => {
+            anyhow::Error::new(ImageError::TarCommandTimedOut { timeout_ms })
+        }
+        error => anyhow::Error::new(error),
+    })
+    .context("failed to execute tar")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
