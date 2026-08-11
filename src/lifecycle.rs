@@ -197,6 +197,7 @@ pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
         env: &config.process.env,
         cwd: config.process.cwd.as_deref(),
         process_user: config.process.user.as_ref(),
+        private_userns: state.userns_mode == "private",
         security_profile,
         cgroup_path: state.cgroup_path.as_deref(),
         tty,

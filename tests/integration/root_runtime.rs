@@ -516,6 +516,51 @@ fn container_env_is_not_inherited_from_host() {
 
 #[test]
 #[ignore = "requires root"]
+fn private_userns_accepts_explicit_root_credentials() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-private-userns");
+    let bundle = TestBundle::new("bundle-private-userns", &["/bin/sh", "-c", "id -u"], "")
+        .expect("bundle should be created");
+    let config_path = bundle.path.join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).expect("config should be readable"))
+            .expect("config should be JSON");
+    config["process"]["user"] = serde_json::json!({
+        "uid": 0,
+        "gid": 0,
+        "additionalGids": []
+    });
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&config).expect("config should serialize"),
+    )
+    .expect("config should be written");
+
+    let output = Command::new(crun())
+        .args([
+            "run",
+            "--net",
+            "none",
+            "--security",
+            "default",
+            "--userns",
+            "private",
+            "--log",
+            "off",
+            id.as_str(),
+        ])
+        .arg(&bundle.path)
+        .output()
+        .expect("failed to run private userns container");
+    assert_success(&output);
+}
+
+#[test]
+#[ignore = "requires root"]
 fn exec_preserves_uid_capability_drop_and_default_seccomp() {
     if !require_root() {
         return;

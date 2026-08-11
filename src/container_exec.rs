@@ -37,6 +37,7 @@ pub struct ExecConfig<'a> {
     pub env: &'a [String],
     pub cwd: Option<&'a str>,
     pub process_user: Option<&'a ProcessUser>,
+    pub private_userns: bool,
     pub security_profile: SecurityProfile,
     pub cgroup_path: Option<&'a str>,
     pub tty: bool,
@@ -154,15 +155,7 @@ fn run_namespace_helper(config: ExecConfig<'_>, pty_manager: Option<PtyManager>)
                     }
                 }
             }
-            exec_command(
-                config.args,
-                config.env,
-                config.cwd,
-                config.process_user,
-                config.security_profile,
-                config.seccomp_program,
-                config.seccomp_flags,
-            )?;
+            exec_command(&config)?;
             unreachable!();
         }
         ForkResult::Parent { child } => {
@@ -212,35 +205,28 @@ fn join_namespaces(target_pid: i32) -> Result<()> {
     Ok(())
 }
 
-fn exec_command(
-    args: &[String],
-    env: &[String],
-    cwd: Option<&str>,
-    process_user: Option<&ProcessUser>,
-    security_profile: SecurityProfile,
-    seccomp_program: Option<&Program>,
-    seccomp_flags: u64,
-) -> Result<()> {
-    let cwd = cwd.unwrap_or("/");
+fn exec_command(config: &ExecConfig<'_>) -> Result<()> {
+    let cwd = config.cwd.unwrap_or("/");
     chdir(cwd).with_context(|| format!("failed to chdir to container cwd: {cwd}"))?;
 
-    replace_environment(env)?;
-    apply_process_user(process_user)?;
+    replace_environment(config.env)?;
+    apply_process_user(config.process_user, config.private_userns)?;
 
-    let command = CString::new(args[0].as_str()).context("invalid exec command")?;
-    let c_args = args
+    let command = CString::new(config.args[0].as_str()).context("invalid exec command")?;
+    let c_args = config
+        .args
         .iter()
         .map(|arg| CString::new(arg.as_str()).context("invalid exec argument"))
         .collect::<Result<Vec<_>>>()?;
 
-    let seccomp_plan = match seccomp_program {
+    let seccomp_plan = match config.seccomp_program {
         Some(program) => SeccompPlan::Enforce {
             program,
-            flags: seccomp_flags,
+            flags: config.seccomp_flags,
         },
         None => SeccompPlan::None,
     };
-    security::apply(security_profile, seccomp_plan)
+    security::apply(config.security_profile, seccomp_plan)
         .context("failed to apply container security profile to exec")?;
 
     execvp(&command, &c_args).context("failed to exec command")?;
@@ -327,6 +313,7 @@ mod tests {
             env: &[],
             cwd: None,
             process_user: None,
+            private_userns: false,
             security_profile: SecurityProfile::Default,
             cgroup_path: None,
             tty: false,

@@ -759,7 +759,7 @@ fn run_child(
     close(userns_mapped_read_fd).ok();
 
     apply_rlimits(config.rlimits)?;
-    apply_process_user(config.process_user)?;
+    apply_process_user(config.process_user, config.userns_mode.is_private())?;
 
     security::apply(config.security_profile, config.seccomp_plan())?;
 
@@ -823,7 +823,7 @@ fn apply_rlimits(rlimits: &[LinuxRlimit]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn apply_process_user(user: Option<&ProcessUser>) -> Result<()> {
+pub(crate) fn apply_process_user(user: Option<&ProcessUser>, private_userns: bool) -> Result<()> {
     let Some(user) = user else {
         return Ok(());
     };
@@ -833,14 +833,16 @@ pub(crate) fn apply_process_user(user: Option<&ProcessUser>) -> Result<()> {
         .iter()
         .map(|gid| *gid as libc::gid_t)
         .collect::<Vec<_>>();
-    let groups_ptr = if groups.is_empty() {
-        std::ptr::null()
-    } else {
-        groups.as_ptr()
-    };
-    let setgroups_result = unsafe { libc::setgroups(groups.len(), groups_ptr) };
-    if setgroups_result < 0 {
-        return Err(std::io::Error::last_os_error()).context("failed to set additional groups");
+    if !private_userns || !groups.is_empty() {
+        let groups_ptr = if groups.is_empty() {
+            std::ptr::null()
+        } else {
+            groups.as_ptr()
+        };
+        let setgroups_result = unsafe { libc::setgroups(groups.len(), groups_ptr) };
+        if setgroups_result < 0 {
+            return Err(std::io::Error::last_os_error()).context("failed to set additional groups");
+        }
     }
 
     let setgid_result = unsafe { libc::setgid(user.gid as libc::gid_t) };
