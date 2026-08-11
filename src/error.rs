@@ -92,6 +92,9 @@ pub enum OciConfigError {
     #[error("process.args must not be empty")]
     EmptyProcessArgs,
 
+    #[error("process.capabilities is not supported")]
+    UnsupportedCapabilities,
+
     #[error("root.path must not be empty")]
     EmptyRootPath,
 

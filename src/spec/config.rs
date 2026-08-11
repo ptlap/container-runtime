@@ -253,6 +253,15 @@ impl OciConfig {
             return Err(OciConfigError::EmptyProcessArgs);
         }
 
+        if self
+            .process
+            .capabilities
+            .as_ref()
+            .is_some_and(|capabilities| !capabilities.is_empty())
+        {
+            return Err(OciConfigError::UnsupportedCapabilities);
+        }
+
         if self.root.path.trim().is_empty() {
             return Err(OciConfigError::EmptyRootPath);
         }
@@ -335,18 +344,7 @@ impl OciConfig {
     }
 
     pub fn validation_warnings(&self) -> Vec<String> {
-        let mut warnings = Vec::new();
-        if self
-            .process
-            .capabilities
-            .as_ref()
-            .is_some_and(|capabilities| !capabilities.is_empty())
-        {
-            warnings.push(
-                "process.capabilities is parsed, but this runtime only enforces full capability drop through --security default".to_string(),
-            );
-        }
-        warnings
+        Vec::new()
     }
 }
 
@@ -529,12 +527,7 @@ mod tests {
         fs::write(
             bundle.join("config.json"),
             r#"{
-                "process": {
-                    "args": ["/bin/sh"],
-                    "capabilities": {
-                        "effective": ["CAP_NET_ADMIN"]
-                    }
-                },
+                "process": { "args": ["/bin/sh"] },
                 "root": { "path": "rootfs" }
             }"#,
         )
@@ -544,8 +537,7 @@ mod tests {
 
         assert!(report.valid);
         assert_eq!(report.bundle, bundle.display().to_string());
-        assert_eq!(report.warnings.len(), 1);
-        assert!(report.warnings[0].contains("process.capabilities"));
+        assert!(report.warnings.is_empty());
 
         fs::remove_dir_all(bundle).expect("cleanup test dir");
     }
@@ -638,7 +630,7 @@ mod tests {
 
     #[test]
     fn parses_oci_user_capabilities_rlimits_and_paths() {
-        let config = parse_config(
+        let config: OciConfig = serde_json::from_str(
             r#"{
                 "process": {
                     "args": ["/bin/sh"],
@@ -666,7 +658,10 @@ mod tests {
             }"#,
         )
         .expect("OCI compatibility fields should parse");
-
+        assert!(matches!(
+            config.validate(),
+            Err(OciConfigError::UnsupportedCapabilities)
+        ));
         let user = config.process.user.as_ref().expect("user should parse");
         assert_eq!(user.uid, 1000);
         assert_eq!(user.gid, 1000);
@@ -691,7 +686,7 @@ mod tests {
                 .masked_paths,
             ["/proc/kcore"]
         );
-        assert_eq!(config.validation_warnings().len(), 1);
+        assert!(config.validation_warnings().is_empty());
     }
 
     #[test]
