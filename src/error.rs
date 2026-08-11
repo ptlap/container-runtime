@@ -92,6 +92,18 @@ pub enum OciConfigError {
     #[error("process.args must not be empty")]
     EmptyProcessArgs,
 
+    #[error("process.env entry at index {index} must use KEY=VALUE syntax")]
+    InvalidEnvironmentEntry { index: usize },
+
+    #[error("process.env entry at index {index} has an empty key")]
+    EmptyEnvironmentKey { index: usize },
+
+    #[error("process.env entry at index {index} contains NUL")]
+    EnvironmentContainsNul { index: usize },
+
+    #[error("process.env contains duplicate key: {key}")]
+    DuplicateEnvironmentKey { key: String },
+
     #[error("process.capabilities is not supported")]
     UnsupportedCapabilities,
 

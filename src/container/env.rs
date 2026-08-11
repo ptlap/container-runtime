@@ -16,15 +16,18 @@ use nix::libc;
 /// When the bundle declares no `PATH`, `execvp` falls back to the confstr
 /// default (`/bin:/usr/bin`), which is deterministic.
 pub fn replace_environment(env: &[String]) -> Result<()> {
+    crate::spec::config::validate_environment(env)?;
+
     if unsafe { libc::clearenv() } != 0 {
         return Err(std::io::Error::last_os_error())
             .context("failed to clear the inherited environment");
     }
 
     for item in env {
-        if let Some((key, value)) = item.split_once('=') {
-            std::env::set_var(key, value);
-        }
+        let (key, value) = item
+            .split_once('=')
+            .expect("environment was validated before installation");
+        std::env::set_var(key, value);
     }
 
     Ok(())

@@ -262,6 +262,8 @@ impl OciConfig {
             return Err(OciConfigError::UnsupportedCapabilities);
         }
 
+        validate_environment(&self.process.env)?;
+
         if self.root.path.trim().is_empty() {
             return Err(OciConfigError::EmptyRootPath);
         }
@@ -346,6 +348,30 @@ impl OciConfig {
     pub fn validation_warnings(&self) -> Vec<String> {
         Vec::new()
     }
+}
+
+pub fn validate_environment(env: &[String]) -> std::result::Result<(), OciConfigError> {
+    let mut keys = std::collections::BTreeSet::new();
+    for (index, item) in env.iter().enumerate() {
+        if item.contains('\0') {
+            return Err(OciConfigError::EnvironmentContainsNul { index });
+        }
+        let Some((key, _value)) = item.split_once('=') else {
+            return Err(OciConfigError::InvalidEnvironmentEntry { index });
+        };
+        if key.is_empty() {
+            return Err(OciConfigError::EmptyEnvironmentKey { index });
+        }
+        if key.contains('=') || key.contains('\0') {
+            return Err(OciConfigError::InvalidEnvironmentEntry { index });
+        }
+        if !keys.insert(key.to_string()) {
+            return Err(OciConfigError::DuplicateEnvironmentKey {
+                key: key.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn rlimit_resource(name: &str) -> Option<libc::__rlimit_resource_t> {
@@ -752,6 +778,27 @@ mod tests {
         assert!(matches!(
             error,
             OciConfigError::UnsupportedCrunProfile { profile } if profile == "fast-but-unsafe"
+        ));
+    }
+
+    #[test]
+    fn validates_environment_entries_before_runtime_setup() {
+        assert!(validate_environment(&["PATH=/bin".to_string(), "EMPTY=".to_string()]).is_ok());
+        assert!(matches!(
+            validate_environment(&["BROKEN".to_string()]),
+            Err(OciConfigError::InvalidEnvironmentEntry { index: 0 })
+        ));
+        assert!(matches!(
+            validate_environment(&["=value".to_string()]),
+            Err(OciConfigError::EmptyEnvironmentKey { index: 0 })
+        ));
+        assert!(matches!(
+            validate_environment(&["A=one".to_string(), "A=two".to_string()]),
+            Err(OciConfigError::DuplicateEnvironmentKey { key }) if key == "A"
+        ));
+        assert!(matches!(
+            validate_environment(&["A=bad\0value".to_string()]),
+            Err(OciConfigError::EnvironmentContainsNul { index: 0 })
         ));
     }
 
