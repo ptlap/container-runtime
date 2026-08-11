@@ -1,7 +1,8 @@
 use crate::command::{self, CommandError, EXTERNAL_COMMAND_TIMEOUT};
 use crate::error::DoctorError;
-use crate::network::{cleanup_veth_host, release_bridge_network};
-use crate::state::{self, ContainerStatus};
+use crate::network::{cleanup_nat_lease, cleanup_veth_host, release_bridge_network, VethPair};
+use crate::process_identity::ProcessIdentity;
+use crate::state::{self, ContainerState, ContainerStatus};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -86,40 +87,119 @@ fn check_stale_running_states(
     fix: bool,
     issues: &mut Vec<DoctorIssue>,
 ) -> Result<()> {
-    for state in states {
-        if state.status != ContainerStatus::Running {
-            continue;
-        }
+    let protected_veths = active_veth_names(states);
 
-        let stale = state
-            .pid
-            .map(|pid| !state::pid_is_alive(pid))
-            .unwrap_or(true);
-        if !stale {
+    for state in states {
+        if state.status != ContainerStatus::Running || !is_stale_process(state) {
             continue;
         }
 
         let mut fixed = false;
+        let mut message = format!(
+            "state is running but pid {:?} does not match the stored process identity",
+            state.pid
+        );
         if fix {
-            let mut fixed_state = state.clone();
-            fixed_state
-                .mark_stopped(None, Some("STALE".to_string()))
-                .with_context(|| format!("failed to mark stale state stopped: {}", state.id))?;
-            state::save(&fixed_state)
-                .with_context(|| format!("failed to save stale state fix: {}", state.id))?;
-            fixed = true;
+            match cleanup_stale_resources(state, &protected_veths)
+                .and_then(|()| mark_stale_state_stopped(state))
+            {
+                Ok(()) => fixed = true,
+                Err(error) => {
+                    message.push_str(&format!("; recovery failed: {error}"));
+                }
+            }
         }
 
         issues.push(DoctorIssue {
             kind: "stale_state".to_string(),
             id: Some(state.id.clone()),
             path: None,
-            message: format!("state is running but pid {:?} is not alive", state.pid),
+            message,
             fixed,
         });
     }
 
     Ok(())
+}
+
+fn is_stale_process(state: &ContainerState) -> bool {
+    state
+        .pid
+        .map(|pid| ProcessIdentity::open(pid, state.process_starttime).is_err())
+        .unwrap_or(true)
+}
+
+fn active_veth_names(states: &[ContainerState]) -> BTreeSet<String> {
+    states
+        .iter()
+        .filter(|state| state.status == ContainerStatus::Running && !is_stale_process(state))
+        .filter_map(|state| state.pid)
+        .map(|pid| VethPair::for_pid(pid).host_name)
+        .collect()
+}
+
+fn cleanup_stale_resources(
+    state: &ContainerState,
+    protected_veths: &BTreeSet<String>,
+) -> Result<()> {
+    let mut errors = Vec::new();
+
+    if let Some(lease) = state.nat_lease.as_ref() {
+        if let Err(error) = cleanup_nat_lease(lease) {
+            errors.push(format!("NAT cleanup failed: {error}"));
+        }
+    }
+
+    if state.network_mode == "bridge" {
+        if let Some(pid) = state.pid {
+            let host_name = VethPair::for_pid(pid).host_name;
+            if !protected_veths.contains(&host_name) {
+                if let Err(error) = cleanup_veth_host(&host_name) {
+                    errors.push(format!("veth {host_name} cleanup failed: {error}"));
+                }
+            }
+        }
+        if let Err(error) = release_bridge_network(&state.id) {
+            errors.push(format!("bridge allocation cleanup failed: {error}"));
+        }
+    }
+
+    if let Some(path) = state.cgroup_path.as_deref() {
+        if let Err(error) = remove_stale_cgroup(Path::new(path)) {
+            errors.push(format!("cgroup cleanup failed: {error}"));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
+    }
+}
+
+fn remove_stale_cgroup(path: &Path) -> Result<()> {
+    for _ in 0..10 {
+        let procs = fs::read_to_string(path.join("cgroup.procs")).unwrap_or_default();
+        if procs.trim().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    if path.exists() {
+        fs::remove_dir(path)
+            .with_context(|| format!("failed to remove cgroup {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn mark_stale_state_stopped(state: &ContainerState) -> Result<()> {
+    let mut fixed_state = state.clone();
+    fixed_state
+        .mark_stopped(None, Some("STALE".to_string()))
+        .with_context(|| format!("failed to mark stale state stopped: {}", state.id))?;
+    state::save(&fixed_state)
+        .with_context(|| format!("failed to save stale state fix: {}", state.id))
 }
 
 fn check_orphan_cgroups(
@@ -192,7 +272,7 @@ fn check_stale_network_allocations(
         .filter(|state| {
             state.status == ContainerStatus::Running
                 && state.network_mode == "bridge"
-                && state.pid.map(state::pid_is_alive).unwrap_or(false)
+                && !is_stale_process(state)
         })
         .map(|state| state.id.as_str())
         .collect::<BTreeSet<_>>();
@@ -296,6 +376,44 @@ fn parse_veth_links(ip_output: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{RuntimeMetadata, StartedResources};
+
+    #[test]
+    fn detects_pid_reuse_using_process_starttime() {
+        let pid = i32::try_from(std::process::id()).expect("test pid should fit i32");
+        let state = ContainerState::running(
+            "identity",
+            Path::new("/tmp/bundle"),
+            pid,
+            StartedResources {
+                cgroup_path: None,
+                network_subnet: None,
+                nat_lease: None,
+                log_path: None,
+            },
+            RuntimeMetadata {
+                network_mode: "none",
+                security_profile: "default",
+                log_mode: "off",
+                userns_mode: "host",
+                userns_map: None,
+                rootfs_mode: "direct",
+                policy_profile: "none",
+                tty: false,
+                seccomp_mode: "off",
+                seccomp_profile: None,
+                seccomp_action: None,
+                seccomp_order: "by_frequency",
+                seccomp_log: false,
+            },
+        )
+        .expect("current process state should build");
+        assert!(!is_stale_process(&state));
+
+        let mut reused = state;
+        reused.process_starttime = reused.process_starttime.map(|start| start + 1);
+        assert!(is_stale_process(&reused));
+    }
 
     #[test]
     fn reports_a_kernel_without_the_seccomp_log_action() {
