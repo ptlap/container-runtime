@@ -154,6 +154,12 @@ pub enum CgroupError {
 
     #[error("cgroup path does not exist: {path}")]
     PathDoesNotExist { path: String },
+
+    #[error("cgroup v2 is not mounted on this host")]
+    CgroupV2Unavailable,
+
+    #[error("required cgroup controller is unavailable: {controller}")]
+    ControllerUnavailable { controller: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

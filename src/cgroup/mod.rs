@@ -3,11 +3,11 @@ use crate::state::{self, ContainerStatus};
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CGROUP_ROOT: &str = "/sys/fs/cgroup/container-runtime";
+const CGROUP_ROOT_NAME: &str = "container-runtime";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CgroupConfig {
@@ -44,6 +44,110 @@ impl CgroupConfig {
         }
 
         Ok(())
+    }
+}
+
+pub fn cgroup_root() -> Result<PathBuf> {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo")
+        .context("failed to read /proc/self/mountinfo")?;
+    find_cgroup2_mountpoint(&mountinfo).ok_or_else(|| CgroupError::CgroupV2Unavailable.into())
+}
+
+fn find_cgroup2_mountpoint(mountinfo: &str) -> Option<PathBuf> {
+    for line in mountinfo.lines() {
+        let Some((mount_fields, filesystem_fields)) = line.split_once(" - ") else {
+            continue;
+        };
+        if filesystem_fields.split_whitespace().next() != Some("cgroup2") {
+            continue;
+        }
+        let mountpoint = mount_fields.split_whitespace().nth(4)?;
+        return Some(PathBuf::from(unescape_mountinfo_path(mountpoint)));
+    }
+    None
+}
+
+fn unescape_mountinfo_path(path: &str) -> String {
+    path.replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+}
+
+fn required_controllers(config: &CgroupConfig) -> BTreeSet<&'static str> {
+    let mut required = BTreeSet::new();
+    if config.memory_limit.is_some() {
+        required.insert("memory");
+    }
+    if config.cpu_quota.is_some() {
+        required.insert("cpu");
+    }
+    if config.pids_limit.is_some() {
+        required.insert("pids");
+    }
+    required
+}
+
+#[derive(Debug, Default)]
+struct ControllerActivation {
+    previous: String,
+    added: Vec<String>,
+}
+
+fn enable_required_controllers(root: &Path, config: &CgroupConfig) -> Result<ControllerActivation> {
+    let required = required_controllers(config);
+    if required.is_empty() {
+        return Ok(ControllerActivation::default());
+    }
+
+    let available = fs::read_to_string(root.join("cgroup.controllers"))
+        .with_context(|| format!("failed to read cgroup controllers: {}", root.display()))?;
+    for controller in &required {
+        if !available
+            .split_whitespace()
+            .any(|value| value == *controller)
+        {
+            return Err(CgroupError::ControllerUnavailable {
+                controller: (*controller).to_string(),
+            }
+            .into());
+        }
+    }
+
+    let previous = fs::read_to_string(root.join("cgroup.subtree_control"))
+        .with_context(|| format!("failed to read cgroup subtree control: {}", root.display()))?;
+    let current = previous.split_whitespace().collect::<BTreeSet<_>>();
+    let newly_enabled = required
+        .iter()
+        .filter(|controller| !current.contains(**controller))
+        .map(|controller| (*controller).to_string())
+        .collect::<Vec<_>>();
+    if newly_enabled.is_empty() {
+        return Ok(ControllerActivation {
+            previous,
+            added: newly_enabled,
+        });
+    }
+
+    let value = newly_enabled
+        .iter()
+        .map(|controller| format!("+{controller}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    fs::write(root.join("cgroup.subtree_control"), value)
+        .with_context(|| format!("failed to enable cgroup controllers: {}", root.display()))?;
+    Ok(ControllerActivation {
+        previous,
+        added: newly_enabled,
+    })
+}
+
+fn rollback_enabled_controllers(root: &Path, activation: &ControllerActivation) {
+    if activation.added.is_empty() {
+        return;
+    }
+    if let Err(error) = fs::write(root.join("cgroup.subtree_control"), &activation.previous) {
+        tracing::warn!("failed to rollback cgroup controllers: {error}");
     }
 }
 
@@ -108,41 +212,37 @@ pub struct IoDeviceStats {
 
 impl Cgroup {
     pub fn new(id: &str, config: &CgroupConfig) -> Result<Self> {
+        let root = cgroup_root()?.join(CGROUP_ROOT_NAME);
+        Self::new_at(&root, id, config)
+    }
+
+    fn new_at(root: &Path, id: &str, config: &CgroupConfig) -> Result<Self> {
+        state::validate_id(id)?;
         config.validate()?;
-
-        let root = Path::new(CGROUP_ROOT);
-
         fs::create_dir_all(root).context("failed to create cgroup root")?;
-
-        // Enable controllers for children of container-runtime.
-        // Ignore failure because some systems may not allow some controllers here.
-        let subtree_control = root.join("cgroup.subtree_control");
-        let _ = fs::write(&subtree_control, "+memory +cpu +pids");
-
+        let activation = enable_required_controllers(root, config)?;
         let path = root.join(id);
-        fs::create_dir_all(&path).context("failed to create container cgroup")?;
-
-        let setup = (|| {
-            if let Some(memory_limit) = config.memory_limit {
-                fs::write(path.join("memory.max"), memory_limit.to_string())
-                    .context("failed to write memory.max")?;
-            }
-
-            if let Some(cpu_quota) = config.cpu_quota {
-                let cpu_period = config.cpu_period.unwrap_or(100_000);
-                fs::write(path.join("cpu.max"), format!("{cpu_quota} {cpu_period}"))
-                    .context("failed to write cpu.max")?;
-            }
-
-            if let Some(pids_limit) = config.pids_limit {
-                fs::write(path.join("pids.max"), pids_limit.to_string())
-                    .context("failed to write pids.max")?;
-            }
-            Ok::<(), anyhow::Error>(())
-        })();
-
-        if let Err(error) = setup {
+        if let Err(error) = fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create container cgroup: {}", path.display()))
+            .and_then(|()| {
+                if let Some(memory_limit) = config.memory_limit {
+                    fs::write(path.join("memory.max"), memory_limit.to_string())
+                        .context("failed to write memory.max")?;
+                }
+                if let Some(cpu_quota) = config.cpu_quota {
+                    let cpu_period = config.cpu_period.unwrap_or(100_000);
+                    fs::write(path.join("cpu.max"), format!("{cpu_quota} {cpu_period}"))
+                        .context("failed to write cpu.max")?;
+                }
+                if let Some(pids_limit) = config.pids_limit {
+                    fs::write(path.join("pids.max"), pids_limit.to_string())
+                        .context("failed to write pids.max")?;
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+        {
             let _ = fs::remove_dir(&path);
+            rollback_enabled_controllers(root, &activation);
             return Err(error);
         }
 
@@ -431,6 +531,76 @@ mod tests {
         assert_eq!(stats[0].wios, Some(2));
         assert_eq!(stats[1].device, "259:0");
         assert_eq!(stats[1].raw.get("unknown"), Some(&99));
+    }
+
+    #[test]
+    fn discovers_cgroup2_mountpoint_from_mountinfo() {
+        let mountinfo =
+            "36 29 0:32 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw";
+        assert_eq!(
+            find_cgroup2_mountpoint(mountinfo),
+            Some(PathBuf::from("/sys/fs/cgroup"))
+        );
+        assert_eq!(
+            find_cgroup2_mountpoint("1 2 0:1 / /tmp rw - tmpfs tmpfs rw"),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_missing_requested_controller() {
+        let root =
+            std::env::temp_dir().join(format!("crun-rs-cgroup-controller-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create cgroup root");
+        fs::write(root.join("cgroup.controllers"), "memory cpu\n").expect("write controllers");
+        fs::write(root.join("cgroup.subtree_control"), "\n").expect("write subtree control");
+
+        let error = Cgroup::new_at(
+            &root,
+            "missing-pids",
+            &CgroupConfig {
+                memory_limit: None,
+                cpu_quota: None,
+                cpu_period: None,
+                pids_limit: Some(4),
+            },
+        )
+        .expect_err("missing pids controller should fail closed");
+        assert!(matches!(
+            error.downcast_ref::<CgroupError>(),
+            Some(CgroupError::ControllerUnavailable { controller }) if controller == "pids"
+        ));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rolls_back_controller_enablement_when_setup_fails() {
+        let root =
+            std::env::temp_dir().join(format!("crun-rs-cgroup-rollback-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create cgroup root");
+        fs::write(root.join("cgroup.controllers"), "memory\n").expect("write controllers");
+        fs::write(root.join("cgroup.subtree_control"), "memory\n").expect("write subtree control");
+        fs::write(root.join("broken"), "not a directory").expect("create broken path");
+
+        let error = Cgroup::new_at(
+            &root,
+            "broken",
+            &CgroupConfig {
+                memory_limit: Some(1024),
+                cpu_quota: None,
+                cpu_period: None,
+                pids_limit: None,
+            },
+        )
+        .expect_err("existing non-directory should fail setup");
+        assert!(error.to_string().contains("container cgroup"));
+        assert_eq!(
+            fs::read_to_string(root.join("cgroup.subtree_control")).expect("read control"),
+            "memory\n"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
