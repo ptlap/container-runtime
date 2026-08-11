@@ -359,6 +359,24 @@ pub enum ImageError {
 
     #[error("tar extraction timed out after {timeout_ms}ms")]
     TarCommandTimedOut { timeout_ms: u128 },
+
+    #[error("archive path escapes rootfs: {path}")]
+    ArchivePathEscapesRootfs { path: String },
+
+    #[error("archive link target is missing: {path}")]
+    ArchiveLinkTargetMissing { path: String },
+
+    #[error("unsupported archive entry type at {path}: {kind}")]
+    UnsupportedArchiveEntry { path: String, kind: &'static str },
+
+    #[error("archive contains too many entries; limit is {limit}")]
+    ArchiveTooManyEntries { limit: u64 },
+
+    #[error("archive expands beyond the {limit} byte limit")]
+    ArchiveTooLarge { limit: u64 },
+
+    #[error("archive file {path} is {size} bytes; limit is {limit}")]
+    ArchiveFileTooLarge { path: String, size: u64, limit: u64 },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
