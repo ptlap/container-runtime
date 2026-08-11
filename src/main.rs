@@ -152,8 +152,8 @@ enum Command {
         json: bool,
         #[arg(long)]
         watch: bool,
-        #[arg(long, default_value_t = DEFAULT_EVENTS_INTERVAL_MS)]
-        interval_ms: u64,
+        #[arg(long)]
+        interval_ms: Option<u64>,
     },
     Ps {
         #[arg(long)]

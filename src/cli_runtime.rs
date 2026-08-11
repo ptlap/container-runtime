@@ -87,10 +87,13 @@ fn print_process_node(node: &ProcessNode, depth: usize) {
     }
 }
 
-pub fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: u64) -> Result<()> {
-    health::run(id, watch, Duration::from_millis(interval_ms), |result| {
-        print_health_result(&result, json)
-    })
+pub fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: Option<u64>) -> Result<()> {
+    health::run(
+        id,
+        watch,
+        interval_ms.map(Duration::from_millis),
+        |result| print_health_result(&result, json),
+    )
 }
 
 fn print_health_result(result: &HealthResult, json: bool) -> Result<()> {
