@@ -380,6 +380,15 @@ pub enum ImageError {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum AuditLogError {
+    #[error("audit log record is {size} bytes; limit is {limit}")]
+    RecordTooLarge { size: usize, limit: usize },
+
+    #[error("audit log history is {size} bytes; limit is {limit}")]
+    HistoryTooLarge { size: usize, limit: usize },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum CheckpointError {
     #[error("container {id} has a conflicting running runtime state")]
     StateConflict { id: String },
