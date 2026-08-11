@@ -10,7 +10,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::warn;
 
 pub const DEFAULT_STATE_ROOT: &str = "/run/crun-rs";
 pub const STATE_SCHEMA_VERSION: u32 = 4;
@@ -409,67 +408,108 @@ fn refresh_liveness(state: &mut ContainerState) -> Result<bool> {
                 return Ok(false);
             }
             Some(_) => {
-                cleanup_stale_resources(state, false);
-                release_state_network_allocation(state);
-                state.mark_stopped(None, Some("STALE_PID_REUSED".to_string()))?;
+                let signal = stale_recovery_signal(state, false, "STALE_PID_REUSED");
+                state.mark_stopped(None, Some(signal))?;
             }
             None => {
-                cleanup_stale_resources(state, false);
-                release_state_network_allocation(state);
-                state.mark_stopped(None, Some("STALE_IDENTITY_MISSING".to_string()))?;
+                let signal = stale_recovery_signal(state, false, "STALE_IDENTITY_MISSING");
+                state.mark_stopped(None, Some(signal))?;
             }
         }
         return Ok(true);
     }
 
-    cleanup_stale_resources(state, true);
-    release_state_network_allocation(state);
-    state.mark_stopped(None, Some("STALE".to_string()))?;
+    let signal = stale_recovery_signal(state, true, "STALE");
+    state.mark_stopped(None, Some(signal))?;
 
     Ok(true)
 }
 
-fn cleanup_stale_resources(state: &ContainerState, pid_identity_owned: bool) {
+fn stale_recovery_signal(
+    state: &ContainerState,
+    pid_identity_owned: bool,
+    base_signal: &str,
+) -> String {
+    let mut errors = Vec::new();
+    if let Err(error) = cleanup_stale_resources(state, pid_identity_owned) {
+        errors.push(error.to_string());
+    }
+    if let Err(error) = release_state_network_allocation(state) {
+        errors.push(format!("bridge allocation cleanup failed: {error}"));
+    }
+
+    format_stale_signal(base_signal, &errors)
+}
+
+fn format_stale_signal(base_signal: &str, errors: &[String]) -> String {
+    if errors.is_empty() {
+        base_signal.to_string()
+    } else {
+        format!("{base_signal}_CLEANUP_FAILED: {}", errors.join("; "))
+    }
+}
+
+fn cleanup_stale_resources(state: &ContainerState, pid_identity_owned: bool) -> Result<()> {
+    let mut errors = Vec::new();
+
     if let Some(cgroup_path) = &state.cgroup_path {
         let path = Path::new(cgroup_path);
         if path.exists() {
-            let _ = fs::remove_dir(path);
+            if let Err(error) = fs::remove_dir(path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    errors.push(format!("cgroup cleanup failed: {error}"));
+                }
+            }
         }
     }
 
     if state.network_mode == "bridge" {
         if let Some(lease) = &state.nat_lease {
-            let _ = cleanup_nat_lease(lease);
+            if let Err(error) = cleanup_nat_lease(lease) {
+                errors.push(format!("NAT cleanup failed: {error}"));
+            }
         }
     }
 
     if let Some(overlay) = &state.overlay_ownership {
-        let _ = overlay.cleanup();
+        if let Err(error) = overlay.cleanup() {
+            errors.push(format!("overlay cleanup failed: {error}"));
+        }
     }
 
     if pid_identity_owned {
         let stable_veth = crate::network::VethPair::for_container_id(&state.id).host_name;
-        let _ = crate::network::cleanup_veth_host(&stable_veth);
+        if let Err(error) = crate::network::cleanup_veth_host(&stable_veth) {
+            errors.push(format!("veth {stable_veth} cleanup failed: {error}"));
+        }
         if let Some(pid) = state.pid {
             let legacy_veth = crate::network::VethPair::for_pid(pid).host_name;
             if legacy_veth != stable_veth {
-                let _ = crate::network::cleanup_veth_host(&legacy_veth);
+                if let Err(error) = crate::network::cleanup_veth_host(&legacy_veth) {
+                    errors.push(format!("veth {legacy_veth} cleanup failed: {error}"));
+                }
             }
         }
     }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
+    }
 }
 
-fn release_state_network_allocation(state: &ContainerState) {
+fn release_state_network_allocation(state: &ContainerState) -> Result<()> {
     if state.network_mode != "bridge" {
-        return;
+        return Ok(());
     }
 
-    if let Err(error) = release_bridge_network(&state.id) {
-        warn!(
-            "failed to release bridge subnet for stale container {}: {error}",
+    release_bridge_network(&state.id).with_context(|| {
+        format!(
+            "failed to release bridge subnet for stale container {}",
             state.id
-        );
-    }
+        )
+    })
 }
 
 pub fn pid_is_alive(pid: i32) -> bool {
@@ -568,7 +608,8 @@ fn delete_from(root: &Path, id: &str) -> Result<()> {
         return Err(StateError::ContainerIsRunning { id: id.to_string() }.into());
     }
 
-    release_state_network_allocation(&state);
+    release_state_network_allocation(&state)
+        .context("failed to release network allocation before deleting state")?;
 
     let dir = container_dir(root, id);
     fs::remove_dir_all(&dir)
@@ -928,6 +969,20 @@ mod tests {
         let states = list_from(&root).expect("missing root should list as empty");
 
         assert!(states.is_empty());
+    }
+
+    #[test]
+    fn includes_all_stale_cleanup_errors_in_signal() {
+        let errors = vec![
+            "cgroup cleanup failed: permission denied".to_string(),
+            "veth vethh123 cleanup failed: command timed out".to_string(),
+        ];
+
+        assert_eq!(
+            format_stale_signal("STALE", &errors),
+            "STALE_CLEANUP_FAILED: cgroup cleanup failed: permission denied; veth vethh123 cleanup failed: command timed out"
+        );
+        assert_eq!(format_stale_signal("STALE", &[]), "STALE");
     }
 
     #[test]

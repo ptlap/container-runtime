@@ -75,8 +75,18 @@ fn import_into(root: &Path, rootfs_tar: &Path, name: &str) -> Result<ImageInfo> 
         .and_then(|()| write_minimal_config(&dir))
         .with_context(|| format!("failed to import image: {name}"))
     {
-        let _ = fs::remove_dir_all(&dir);
-        return Err(error);
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => return Err(error),
+            Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(error);
+            }
+            Err(cleanup_error) => {
+                return Err(anyhow::anyhow!(
+                    "{error}; failed to cleanup partial image directory {}: {cleanup_error}",
+                    dir.display()
+                ));
+            }
+        }
     }
 
     image_info(root, name)

@@ -476,9 +476,13 @@ pub fn setup_nat(subnet: &str) -> Result<NatLease> {
         Ok::<(), anyhow::Error>(())
     })();
 
-    if let Err(error) = setup {
-        cleanup_nat_lease(&lease).ok();
-        return Err(error);
+    if let Err(setup_error) = setup {
+        return Err(match cleanup_nat_lease(&lease) {
+            Ok(()) => setup_error,
+            Err(cleanup_error) => anyhow::anyhow!(
+                "NAT setup failed: {setup_error}; NAT rollback failed: {cleanup_error}"
+            ),
+        });
     }
 
     Ok(lease)
