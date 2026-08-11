@@ -25,7 +25,7 @@ pub struct TraceReport {
     pub proc_status: BTreeMap<String, String>,
     pub process_tree: ProcessNode,
     pub strace: StraceReport,
-    pub ebpf: String,
+    pub ebpf_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -33,6 +33,7 @@ pub struct ProcessNode {
     pub pid: i32,
     pub command: String,
     pub children: Vec<ProcessNode>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -63,7 +64,7 @@ pub fn trace(id: &str, options: TraceOptions) -> Result<TraceReport> {
         proc_status,
         process_tree,
         strace,
-        ebpf: "not enabled; eBPF remains an optional research extension".to_string(),
+        ebpf_available: false,
     })
 }
 
@@ -86,6 +87,7 @@ fn collect_process_node(
             pid,
             command,
             children: Vec::new(),
+            truncated: false,
         });
     }
 
@@ -102,6 +104,7 @@ fn collect_process_node(
         pid,
         command: read_command(pid)?,
         children,
+        truncated: depth >= MAX_PROCESS_TREE_DEPTH,
     })
 }
 
@@ -256,6 +259,34 @@ NoNewPrivs:	1
         let command = parse_cmdline(b"/bin/sh\0-c\0sleep 10\0");
 
         assert_eq!(command, "/bin/sh -c sleep 10");
+    }
+
+    #[test]
+    fn serializes_trace_completeness_signals() {
+        let report = TraceReport {
+            id: "demo".to_string(),
+            pid: 42,
+            runtime_status: "running".to_string(),
+            proc_status: BTreeMap::new(),
+            process_tree: ProcessNode {
+                pid: 42,
+                command: "sh".to_string(),
+                children: Vec::new(),
+                truncated: true,
+            },
+            strace: StraceReport {
+                available: false,
+                requested: false,
+                duration_ms: None,
+                summary: None,
+                error: None,
+            },
+            ebpf_available: false,
+        };
+
+        let value = serde_json::to_value(report).expect("trace report should serialize");
+        assert_eq!(value["process_tree"]["truncated"], true);
+        assert_eq!(value["ebpf_available"], false);
     }
 
     #[test]

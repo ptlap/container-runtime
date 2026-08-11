@@ -74,14 +74,15 @@ pub fn print_trace_report(report: &TraceReport, json: bool) -> Result<()> {
     if let Some(error) = report.strace.error.as_deref() {
         println!("strace_error: {error}");
     }
-    println!("ebpf: {}", report.ebpf);
+    println!("ebpf_available: {}", report.ebpf_available);
 
     Ok(())
 }
 
 fn print_process_node(node: &ProcessNode, depth: usize) {
     let indent = "  ".repeat(depth);
-    println!("{indent}- {} {}", node.pid, node.command);
+    let truncated = if node.truncated { " [truncated]" } else { "" };
+    println!("{indent}- {} {}{}", node.pid, node.command, truncated);
     for child in &node.children {
         print_process_node(child, depth + 1);
     }
