@@ -436,9 +436,13 @@ fn cleanup_stale_resources(state: &ContainerState, pid_identity_owned: bool) {
     }
 
     if pid_identity_owned {
+        let stable_veth = crate::network::VethPair::for_container_id(&state.id).host_name;
+        let _ = crate::network::cleanup_veth_host(&stable_veth);
         if let Some(pid) = state.pid {
-            let host_veth = format!("vethh{pid}");
-            let _ = crate::network::cleanup_veth_host(&host_veth);
+            let legacy_veth = crate::network::VethPair::for_pid(pid).host_name;
+            if legacy_veth != stable_veth {
+                let _ = crate::network::cleanup_veth_host(&legacy_veth);
+            }
         }
     }
 }

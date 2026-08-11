@@ -133,8 +133,13 @@ fn active_veth_names(states: &[ContainerState]) -> BTreeSet<String> {
     states
         .iter()
         .filter(|state| state.status == ContainerStatus::Running && !is_stale_process(state))
-        .filter_map(|state| state.pid)
-        .map(|pid| VethPair::for_pid(pid).host_name)
+        .flat_map(|state| {
+            let mut names = vec![VethPair::for_container_id(&state.id).host_name];
+            if let Some(pid) = state.pid {
+                names.push(VethPair::for_pid(pid).host_name);
+            }
+            names
+        })
         .collect()
 }
 
@@ -151,8 +156,11 @@ fn cleanup_stale_resources(
     }
 
     if state.network_mode == "bridge" {
+        let mut host_names = vec![VethPair::for_container_id(&state.id).host_name];
         if let Some(pid) = state.pid {
-            let host_name = VethPair::for_pid(pid).host_name;
+            host_names.push(VethPair::for_pid(pid).host_name);
+        }
+        for host_name in host_names {
             if !protected_veths.contains(&host_name) {
                 if let Err(error) = cleanup_veth_host(&host_name) {
                     errors.push(format!("veth {host_name} cleanup failed: {error}"));
