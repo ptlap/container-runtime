@@ -15,7 +15,7 @@ production-ready OCI runtime.
 - Apply cgroups v2 memory and CPU limits.
 - Inspect cgroup stats while a container is running.
 - Support network modes: `bridge`, `none`, and `host`.
-- Support security profiles: `default` and `unconfined`.
+- Support security profiles: `denylist` (legacy CLI alias: `default`) and `unconfined`.
 - Store runtime state under `/run/crun-rs/<id>/state.json`.
 
 ## Requirements
@@ -89,10 +89,11 @@ Network modes:
 
 Security profiles:
 
-- `default`: enables Linux `no_new_privs` and clears effective, permitted, and
-  inheritable capabilities before `exec`. It also installs a small seccomp
-  denylist for host-impacting syscalls such as `mount`, `ptrace`, `bpf`,
-  `keyctl`, module loading, and reboot operations.
+- `denylist` (the legacy CLI spelling `default` is accepted): enables Linux
+  `no_new_privs` and clears effective, permitted, and inheritable capabilities
+  before `exec`. It also installs a small seccomp denylist for host-impacting
+  syscalls such as `mount`, `ptrace`, `bpf`, `keyctl`, module loading, and reboot
+  operations.
 - `unconfined`: skips runtime security hardening for debugging.
 
 ## Seccomp profile generation
@@ -126,6 +127,17 @@ which allows the call but records it, turning a profile into a dry run.
 Generated profiles use the OCI `linux.seccomp` schema, so they can be handed to
 runc or youki unchanged. Provenance travels alongside under `crunMetadata`.
 
+### Healthcheck security boundary
+
+Healthchecks run through the same namespace-joining execution path as `crun
+exec`, but they intentionally do not install the generated seccomp allowlist.
+The container's base security profile is still applied: under `denylist`,
+`no_new_privs`, capability removal, and the fixed host-impacting syscall denylist
+remain active; under `unconfined`, that base hardening is intentionally absent.
+This separation prevents an operator-supplied probe from being marked unhealthy
+only because its syscall set was not present in the workload capture. It does not
+make healthchecks a trusted or unrestricted execution context under `denylist`.
+
 Evaluation methodology is in `docs/research/methodology.md`; the whole pipeline
 reruns with `sudo scripts/reproduce.sh --quick`.
 
@@ -133,8 +145,9 @@ reruns with `sudo scripts/reproduce.sh --quick`.
 
 - OCI support is partial: `create` writes state without creating a process, and
   `start` blocks until the container exits, so there is no detached mode.
-- Healthcheck probes run without a seccomp filter, by design; `crun exec`
-  installs the container's own filter.
+- Healthcheck probes do not install the generated seccomp allowlist, by design;
+  they still receive the container's base security profile, while `crun exec`
+  installs the generated profile when enforcement is enabled.
 - Learn mode observes only the paths a run exercised, so a generated profile can
   miss syscalls a rarer path needs. See `docs/research/limitations.md`.
 - `--net bridge` creates a veth pair and NAT per container rather than a shared

@@ -46,12 +46,15 @@ for performance figures.
 
 ## Runtime
 
-**`crun exec` applies the profile, healthchecks do not.** seccomp is not
-inherited through `setns`, so an exec session has to install the container's
-filter itself; it now does. Healthchecks deliberately still run unfiltered:
-they are the operator's own probe rather than container-controlled code, and
-confining them would report a container as unhealthy whenever its profile is
-narrower than its probe.
+**Healthchecks omit the generated profile but keep the base security layer.**
+seccomp is not inherited through `setns`, so a `crun exec` session has to install
+the container's generated filter itself; it now does. Healthchecks deliberately
+set `seccomp_program` to none because they are the operator's own probe rather
+than container-controlled workload code. The selected base security profile is
+still applied: `denylist` preserves `no_new_privs`, capability removal, and the
+fixed host-impacting syscall denylist, while `unconfined` intentionally omits
+that layer. The generated allowlist is not installed because a probe using a
+syscall absent from the workload capture would otherwise be reported unhealthy.
 
 **`create` and `start` are not OCI conformant.** `create` writes a state file and
 creates no process; `start` does the whole fork and exec and blocks until the

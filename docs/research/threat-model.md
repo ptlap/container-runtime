@@ -17,13 +17,25 @@ problem, and everything after it is the kernel's attack surface.
 Reach the host: escape the namespaces, gain privileges the container was not
 given, or corrupt kernel memory. Every route runs through a syscall.
 
-## What the profile does
+## What the security layers do
 
-A generated profile denies the syscalls the workload never used. An exploit
-needing one of them fails at the boundary rather than in the kernel, regardless
-of whether the underlying bug is present, exploitable, or even known. That is
-the property being measured: not "this CVE is patched" but "this route does not
-exist for this container".
+The runtime has two independent security layers. The selected base profile is
+applied when the container process is prepared and is reapplied to namespace-
+joining `crun exec` sessions. Under `denylist`, it enables `no_new_privs`, removes
+capabilities, and denies a fixed set of host-impacting syscalls. Under
+`unconfined`, this base hardening is intentionally skipped.
+
+A generated profile is an optional second layer. It denies the syscalls the
+workload never used when `--seccomp enforce` is selected, and the same generated
+filter is installed for `crun exec` enforcement. Healthchecks deliberately do not
+install this generated allowlist: they are operator-supplied probes, not the
+captured workload. They still receive the selected base profile, so omitting the
+allowlist does not make a `denylist` healthcheck unrestricted.
+
+An exploit needing a denied syscall fails at the boundary rather than in the
+kernel, regardless of whether the underlying bug is present, exploitable, or
+even known. That is the property being measured: not "this CVE is patched" but
+"this route does not exist for this container".
 
 ## What it does not do
 
@@ -45,8 +57,10 @@ runtime does before the filter is installed is not covered by the filter. The
 memfd self-exec in `selfexec.rs` addresses one specific instance of this class,
 where a container overwrites the runtime binary through `/proc/self/exe`.
 
-**Healthcheck probes.** They run unfiltered by design, so a probe is not a
-confined execution context. `crun exec` sessions do get the container's filter.
+**The generated allowlist does not cover healthcheck probes.** They are not a
+fully confined execution context under the optional generated profile, but the
+base `denylist` security layer still applies. `crun exec` sessions get the
+container's generated filter when enforcement is enabled.
 
 ## Trust boundaries
 
