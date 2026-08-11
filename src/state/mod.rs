@@ -1,4 +1,5 @@
 use crate::error::StateError;
+use crate::filesystem::OverlayOwnership;
 use crate::network::{cleanup_nat_lease, release_bridge_network, NatLease};
 use crate::userns::UserNamespaceMap;
 use anyhow::{Context, Result};
@@ -42,6 +43,8 @@ pub struct ContainerState {
     pub network_subnet: Option<String>,
     #[serde(default)]
     pub nat_lease: Option<NatLease>,
+    #[serde(default)]
+    pub overlay_ownership: Option<OverlayOwnership>,
     #[serde(default)]
     pub log_path: Option<String>,
     #[serde(default = "default_log_mode")]
@@ -90,6 +93,7 @@ pub struct StartedResources<'a> {
     pub cgroup_path: Option<Cow<'a, str>>,
     pub network_subnet: Option<Cow<'a, str>>,
     pub nat_lease: Option<NatLease>,
+    pub overlay_ownership: Option<OverlayOwnership>,
     pub log_path: Option<Cow<'a, str>>,
 }
 
@@ -126,6 +130,7 @@ impl ContainerState {
             network_mode: metadata.network_mode.to_string(),
             network_subnet: None,
             nat_lease: None,
+            overlay_ownership: None,
             log_path: Some(log_file(id).display().to_string()),
             log_mode: metadata.log_mode.to_string(),
             security_profile: metadata.security_profile.to_string(),
@@ -168,6 +173,7 @@ impl ContainerState {
             network_mode: metadata.network_mode.to_string(),
             network_subnet: resources.network_subnet.map(Cow::into_owned),
             nat_lease: resources.nat_lease,
+            overlay_ownership: resources.overlay_ownership,
             log_path: resources.log_path.map(Cow::into_owned),
             log_mode: metadata.log_mode.to_string(),
             security_profile: metadata.security_profile.to_string(),
@@ -201,6 +207,7 @@ impl ContainerState {
         self.cgroup_path = resources.cgroup_path.map(Cow::into_owned);
         self.network_subnet = resources.network_subnet.map(Cow::into_owned);
         self.nat_lease = resources.nat_lease;
+        self.overlay_ownership = resources.overlay_ownership;
         self.log_path = resources.log_path.map(Cow::into_owned);
         self.log_mode = log_mode.to_string();
         self.updated_at_unix = unix_timestamp()?;
@@ -225,6 +232,7 @@ impl ContainerState {
         self.cgroup_path = None;
         self.network_subnet = None;
         self.nat_lease = None;
+        self.overlay_ownership = None;
         self.exit_code = exit_code;
         self.signal = signal;
         Ok(())
@@ -433,6 +441,10 @@ fn cleanup_stale_resources(state: &ContainerState, pid_identity_owned: bool) {
         if let Some(lease) = &state.nat_lease {
             let _ = cleanup_nat_lease(lease);
         }
+    }
+
+    if let Some(overlay) = &state.overlay_ownership {
+        let _ = overlay.cleanup();
     }
 
     if pid_identity_owned {
@@ -741,6 +753,7 @@ mod tests {
                 cgroup_path: Some(Cow::Borrowed("/sys/fs/cgroup/container-runtime/crun-1234")),
                 network_subnet: None,
                 nat_lease: None,
+                overlay_ownership: None,
                 log_path: Some(Cow::Borrowed("/run/crun-rs/demo/container.log")),
             },
             metadata,
@@ -946,6 +959,7 @@ mod tests {
                 cgroup_path: None,
                 network_subnet: None,
                 nat_lease: None,
+                overlay_ownership: None,
                 log_path: None,
             },
             metadata,
@@ -993,6 +1007,7 @@ mod tests {
                 cgroup_path: Some(Cow::Borrowed("/sys/fs/cgroup/container-runtime/crun-stale")),
                 network_subnet: Some(Cow::Borrowed("10.88.20.0/24")),
                 nat_lease: None,
+                overlay_ownership: None,
                 log_path: Some(Cow::Borrowed("/run/crun-rs/stale/container.log")),
             },
             metadata,

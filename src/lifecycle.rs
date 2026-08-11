@@ -422,6 +422,7 @@ pub fn run_container_process(
             cgroup_path: cgroup_path.as_deref().map(Cow::Borrowed),
             network_subnet: started.network_subnet.as_deref().map(Cow::Borrowed),
             nat_lease: started.nat_lease.clone(),
+            overlay_ownership: started.overlay_ownership.clone(),
             log_path: log_path_string.as_deref().map(Cow::Borrowed),
         };
         let state = if let Some(mut state) = existing_state.take() {

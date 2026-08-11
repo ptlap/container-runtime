@@ -178,6 +178,12 @@ fn cleanup_stale_resources(
         }
     }
 
+    if let Some(overlay) = state.overlay_ownership.as_ref() {
+        if let Err(error) = overlay.cleanup() {
+            errors.push(format!("overlay cleanup failed: {error}"));
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -397,6 +403,7 @@ mod tests {
                 cgroup_path: None,
                 network_subnet: None,
                 nat_lease: None,
+                overlay_ownership: None,
                 log_path: None,
             },
             RuntimeMetadata {

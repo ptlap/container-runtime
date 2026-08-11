@@ -3,7 +3,9 @@ use super::log_helper::{redirect_stdio_to_log, start_log_helper, wait_for_log_he
 use super::pty;
 use crate::cgroup::Cgroup;
 use crate::error::ContainerError;
-use crate::filesystem::{apply_oci_linux_paths, setup_overlay_rootfs, setup_rootfs, OverlayConfig};
+use crate::filesystem::{
+    apply_oci_linux_paths, setup_overlay_rootfs, setup_rootfs, OverlayConfig, OverlayOwnership,
+};
 use crate::network::{
     allocate_bridge_network, cleanup_nat_lease, cleanup_veth_host, release_bridge_network,
     setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NatLease,
@@ -249,16 +251,18 @@ struct ParentResources {
     cgroup: Option<Cgroup>,
     bridge_network: Option<BridgeNetwork>,
     nat_lease: Option<NatLease>,
+    overlay_ownership: Option<OverlayOwnership>,
     release_bridge_allocation: bool,
 }
 
 impl ParentResources {
-    fn new(container_id: &str) -> Self {
+    fn new(container_id: &str, overlay_ownership: Option<OverlayOwnership>) -> Self {
         Self {
             container_id: container_id.to_string(),
             cgroup: None,
             bridge_network: None,
             nat_lease: None,
+            overlay_ownership,
             release_bridge_allocation: false,
         }
     }
@@ -286,6 +290,17 @@ impl ParentResources {
                 first_error.get_or_insert(error);
             }
             self.release_bridge_allocation = false;
+        }
+
+        if let Some(overlay) = self.overlay_ownership.take() {
+            if let Err(error) = overlay.cleanup().with_context(|| {
+                format!(
+                    "failed to cleanup overlay artifacts for {}",
+                    self.container_id
+                )
+            }) {
+                first_error.get_or_insert(error);
+            }
         }
 
         if let Some(cgroup) = self.cgroup.take() {
@@ -395,6 +410,11 @@ pub fn run_process(
         );
     }
 
+    let overlay_ownership = config
+        .overlay_config
+        .as_ref()
+        .map(OverlayOwnership::from_config);
+
     let process_exit = match unsafe { fork() }.context("failed to fork process")? {
         ForkResult::Child => {
             close(write_fd).ok();
@@ -480,7 +500,7 @@ pub fn run_process(
                 pty.close_slave();
             }
             let child_pid = child.as_raw();
-            let mut resources = ParentResources::new(config.id);
+            let mut resources = ParentResources::new(config.id, overlay_ownership.clone());
 
             if let Some(cgroup_config) = config.cgroup_config {
                 let cgroup = match Cgroup::new(&format!("crun-{child_pid}"), &cgroup_config) {
@@ -527,6 +547,7 @@ pub fn run_process(
                     .as_ref()
                     .map(|network| network.subnet.clone()),
                 nat_lease: resources.nat_lease.clone(),
+                overlay_ownership: resources.overlay_ownership.clone(),
             })?;
 
             let signal = resources

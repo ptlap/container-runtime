@@ -281,6 +281,9 @@ pub enum FilesystemError {
 
     #[error("overlay upperdir does not exist: {path}")]
     OverlayUpperdirDoesNotExist { path: String },
+
+    #[error("overlay mergeddir already exists and is not owned by this start: {path}")]
+    OverlayMergeddirAlreadyExists { path: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

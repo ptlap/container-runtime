@@ -1,6 +1,6 @@
 use crate::cgroup::CgroupConfig;
 use crate::error::ContainerError;
-use crate::filesystem::OverlayConfig;
+use crate::filesystem::{OverlayConfig, OverlayOwnership};
 use crate::network::NetworkMode;
 use crate::seccomp::{Program, SeccompMode};
 use crate::security::SecurityProfile;
@@ -271,6 +271,7 @@ pub struct StartedProcess {
     pub cgroup_path: Option<PathBuf>,
     pub network_subnet: Option<String>,
     pub nat_lease: Option<crate::network::NatLease>,
+    pub overlay_ownership: Option<OverlayOwnership>,
 }
 
 #[cfg(test)]

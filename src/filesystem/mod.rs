@@ -4,6 +4,7 @@ use nix::fcntl::{open, openat2, OFlag, OpenHow, ResolveFlag};
 use nix::mount::{mount, umount2, MntFlags, MsFlags};
 use nix::sys::stat::{fstat, makedev, mkdirat, mknod, Mode, SFlag};
 use nix::unistd::{chdir, pivot_root};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -20,6 +21,44 @@ pub struct OverlayConfig {
     pub upperdir: PathBuf,
     pub workdir: PathBuf,
     pub mergeddir: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OverlayOwnership {
+    pub upperdir: PathBuf,
+    pub workdir: PathBuf,
+    pub mergeddir: PathBuf,
+    #[serde(default)]
+    pub merged_created: bool,
+}
+
+impl OverlayOwnership {
+    pub fn from_config(config: &OverlayConfig) -> Self {
+        Self {
+            upperdir: config.upperdir.clone(),
+            workdir: config.workdir.clone(),
+            mergeddir: config.mergeddir.clone(),
+            merged_created: fs::symlink_metadata(&config.mergeddir).is_err(),
+        }
+    }
+
+    pub fn cleanup(&self) -> Result<()> {
+        if self.merged_created {
+            match fs::remove_dir(&self.mergeddir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to remove overlay merged directory: {}",
+                            self.mergeddir.display()
+                        )
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,24 +139,54 @@ pub fn setup_overlay_rootfs(config: &OverlayConfig) -> Result<PathBuf> {
         .into());
     }
 
-    fs::create_dir_all(&config.upperdir).with_context(|| {
-        format!(
-            "failed to create overlay upperdir: {}",
-            config.upperdir.display()
-        )
-    })?;
-    fs::create_dir_all(&config.workdir).with_context(|| {
-        format!(
-            "failed to create overlay workdir: {}",
-            config.workdir.display()
-        )
-    })?;
-    fs::create_dir_all(&config.mergeddir).with_context(|| {
-        format!(
-            "failed to create overlay mergeddir: {}",
-            config.mergeddir.display()
-        )
-    })?;
+    let upper_existed = fs::symlink_metadata(&config.upperdir).is_ok();
+    let work_existed = fs::symlink_metadata(&config.workdir).is_ok();
+    let merged_existed = fs::symlink_metadata(&config.mergeddir).is_ok();
+    if merged_existed {
+        return Err(FilesystemError::OverlayMergeddirAlreadyExists {
+            path: config.mergeddir.display().to_string(),
+        }
+        .into());
+    }
+    let cleanup_created = || {
+        if !merged_existed {
+            let _ = fs::remove_dir(&config.mergeddir);
+        }
+        if !work_existed {
+            let _ = fs::remove_dir(&config.workdir);
+        }
+        if !upper_existed {
+            let _ = fs::remove_dir(&config.upperdir);
+        }
+    };
+
+    if let Err(error) = fs::create_dir_all(&config.upperdir)
+        .with_context(|| {
+            format!(
+                "failed to create overlay upperdir: {}",
+                config.upperdir.display()
+            )
+        })
+        .and_then(|()| {
+            fs::create_dir_all(&config.workdir).with_context(|| {
+                format!(
+                    "failed to create overlay workdir: {}",
+                    config.workdir.display()
+                )
+            })
+        })
+        .and_then(|()| {
+            fs::create_dir_all(&config.mergeddir).with_context(|| {
+                format!(
+                    "failed to create overlay mergeddir: {}",
+                    config.mergeddir.display()
+                )
+            })
+        })
+    {
+        cleanup_created();
+        return Err(error);
+    }
 
     let data = format!(
         "lowerdir={},upperdir={},workdir={}",
@@ -126,7 +195,7 @@ pub fn setup_overlay_rootfs(config: &OverlayConfig) -> Result<PathBuf> {
         config.workdir.display()
     );
 
-    mount(
+    if let Err(error) = mount(
         Some("overlay"),
         config.mergeddir.as_path(),
         Some("overlay"),
@@ -138,7 +207,10 @@ pub fn setup_overlay_rootfs(config: &OverlayConfig) -> Result<PathBuf> {
             "failed to mount overlay rootfs at {}",
             config.mergeddir.display()
         )
-    })?;
+    }) {
+        cleanup_created();
+        return Err(error);
+    }
 
     Ok(config.mergeddir.clone())
 }
@@ -321,7 +393,7 @@ fn setup_filesystem_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
     let filesystem = filesystem_type(&mount_config.mount_type);
     let source = mount_config.source.as_deref().unwrap_or(filesystem);
 
-    mount(
+    if let Err(error) = mount(
         Some(source),
         mount_path.as_path(),
         Some(filesystem),
@@ -333,16 +405,24 @@ fn setup_filesystem_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
             "failed to mount {filesystem} at {}",
             destination.path.display()
         )
-    })?;
+    }) {
+        destination.rollback(false);
+        return Err(error);
+    }
 
     if let Some(propagation) = options.propagation {
-        mount::<str, Path, str, str>(None, destination.path.as_path(), None, propagation, None)
-            .with_context(|| {
-                format!(
-                    "failed to set mount propagation for {}",
-                    destination.path.display()
-                )
-            })?;
+        if let Err(error) =
+            mount::<str, Path, str, str>(None, destination.path.as_path(), None, propagation, None)
+                .with_context(|| {
+                    format!(
+                        "failed to set mount propagation for {}",
+                        destination.path.display()
+                    )
+                })
+        {
+            destination.rollback(true);
+            return Err(error);
+        }
     }
 
     Ok(())
@@ -438,7 +518,7 @@ fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
         flags |= MsFlags::MS_REC;
     }
 
-    mount(
+    if let Err(error) = mount(
         Some(source_path),
         mount_path.as_path(),
         None::<&str>,
@@ -451,20 +531,32 @@ fn setup_bind_mount(rootfs: &Path, mount_config: &Mount) -> Result<()> {
             source,
             destination.path.display()
         )
-    })?;
+    }) {
+        destination.rollback(false);
+        return Err(error);
+    }
 
     if readonly {
         let mut remount_flags = MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY;
         if recursive {
             remount_flags |= MsFlags::MS_REC;
         }
-        mount::<Path, Path, str, str>(None, destination.path.as_path(), None, remount_flags, None)
-            .with_context(|| {
-                format!(
-                    "failed to remount bind mount readonly: {}",
-                    destination.path.display()
-                )
-            })?;
+        if let Err(error) = mount::<Path, Path, str, str>(
+            None,
+            destination.path.as_path(),
+            None,
+            remount_flags,
+            None,
+        )
+        .with_context(|| {
+            format!(
+                "failed to remount bind mount readonly: {}",
+                destination.path.display()
+            )
+        }) {
+            destination.rollback(true);
+            return Err(error);
+        }
     }
 
     Ok(())
@@ -509,12 +601,53 @@ fn container_mount_destination(rootfs: &Path, destination: &str) -> Result<PathB
 struct PreparedMountDestination {
     path: PathBuf,
     fd: OwnedFd,
+    created_paths: Vec<PathBuf>,
 }
 
 impl PreparedMountDestination {
     fn mount_path(&self) -> PathBuf {
         PathBuf::from(format!("/proc/self/fd/{}", self.fd.as_raw_fd()))
     }
+
+    fn rollback(self, mounted: bool) {
+        if mounted {
+            let mount_path = self.mount_path();
+            let _ = umount2(&mount_path, MntFlags::MNT_DETACH);
+        }
+        drop(self.fd);
+        for path in self.created_paths.iter().rev() {
+            let _ = fs::remove_dir(path).or_else(|_| fs::remove_file(path));
+        }
+    }
+}
+
+fn prospective_created_paths(
+    rootfs: &Path,
+    components: &[OsString],
+    source_is_dir: bool,
+) -> Vec<PathBuf> {
+    let mut created = Vec::new();
+    let final_index = if source_is_dir {
+        components.len()
+    } else {
+        components.len().saturating_sub(1)
+    };
+    let mut candidate = rootfs.to_path_buf();
+    for component in components.iter().take(final_index) {
+        candidate.push(component);
+        if fs::symlink_metadata(&candidate).is_err() {
+            created.push(candidate.clone());
+        }
+    }
+    if !source_is_dir {
+        if let Some(component) = components.last() {
+            candidate.push(component);
+            if fs::symlink_metadata(&candidate).is_err() {
+                created.push(candidate);
+            }
+        }
+    }
+    created
 }
 
 fn prepare_mount_destination(
@@ -534,23 +667,28 @@ fn prepare_mount_destination(
     )
     .with_context(|| format!("failed to open rootfs directory: {}", rootfs.display()))?;
 
+    let created_paths = prospective_created_paths(rootfs, &components, source_is_dir);
     let fd = if source_is_dir {
         open_or_create_directory_tree(&root_fd, &components).with_context(|| {
             format!(
                 "failed to resolve directory mount destination without symlinks: {}",
                 path.display()
             )
-        })?
+        })
     } else {
         open_or_create_file_destination(&root_fd, &components).with_context(|| {
             format!(
                 "failed to resolve file mount destination without symlinks: {}",
                 path.display()
             )
-        })?
-    };
+        })
+    }?;
 
-    Ok(PreparedMountDestination { path, fd })
+    Ok(PreparedMountDestination {
+        path,
+        fd,
+        created_paths,
+    })
 }
 
 fn relative_components(path: &Path) -> Result<Vec<OsString>> {
@@ -968,6 +1106,67 @@ mod tests {
 
         let _ = fs::remove_dir_all(rootfs);
         let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn rolls_back_only_new_mount_destination_paths() {
+        let rootfs = unique_temp_path("rollback-destination");
+        fs::create_dir_all(&rootfs).expect("rootfs should be created");
+        let destination = prepare_mount_destination(&rootfs, "/var/lib/data", true)
+            .expect("destination should be prepared");
+        assert!(rootfs.join("var/lib/data").is_dir());
+
+        destination.rollback(false);
+        assert!(!rootfs.join("var").exists());
+        let _ = fs::remove_dir_all(rootfs);
+    }
+
+    #[test]
+    fn overlay_ownership_cleanup_removes_only_runtime_merged_dir() {
+        let root = unique_temp_path("overlay-ownership");
+        let upper = root.join("upper");
+        let work = root.join("work");
+        let merged = root.join("merged");
+        fs::create_dir_all(&upper).expect("upper should exist");
+        fs::create_dir_all(&work).expect("work should exist");
+        fs::create_dir_all(&merged).expect("merged should exist");
+        fs::write(upper.join("stateful"), "keep").expect("upper content should exist");
+
+        let ownership = OverlayOwnership {
+            upperdir: upper.clone(),
+            workdir: work.clone(),
+            mergeddir: merged.clone(),
+            merged_created: true,
+        };
+        ownership.cleanup().expect("merged cleanup should succeed");
+
+        assert!(!merged.exists());
+        assert!(upper.join("stateful").exists());
+        assert!(work.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn existing_merged_dir_is_not_owned_by_new_overlay_start() {
+        let root = unique_temp_path("overlay-existing");
+        let config = OverlayConfig {
+            lowerdir: root.join("lower"),
+            upperdir: root.join("upper"),
+            workdir: root.join("work"),
+            mergeddir: root.join("merged"),
+        };
+        fs::create_dir_all(&config.lowerdir).expect("lower should exist");
+        fs::create_dir_all(&config.mergeddir).expect("merged should exist");
+
+        let ownership = OverlayOwnership::from_config(&config);
+        assert!(!ownership.merged_created);
+        let error = setup_overlay_rootfs(&config).expect_err("stale merged dir should be rejected");
+        assert!(matches!(
+            error.downcast_ref::<FilesystemError>(),
+            Some(FilesystemError::OverlayMergeddirAlreadyExists { .. })
+        ));
+        assert!(config.mergeddir.exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
