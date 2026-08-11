@@ -17,6 +17,7 @@ pub mod modes;
 pub mod namespace;
 pub mod network;
 pub mod policy;
+pub mod process_identity;
 pub mod rootfs_diff;
 pub mod seccomp;
 pub mod security;

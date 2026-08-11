@@ -49,6 +49,21 @@ pub enum ContainerError {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum ProcessIdentityError {
+    #[error("process {pid} identity token is missing")]
+    MissingToken { pid: i32 },
+
+    #[error("process {pid} identity no longer matches the recorded process")]
+    Reused { pid: i32 },
+
+    #[error("failed to open pidfd for process {pid}: {errno}")]
+    PidfdOpen { pid: i32, errno: String },
+
+    #[error("failed to signal process {pid} through pidfd: {errno}")]
+    PidfdSignal { pid: i32, errno: String },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum LifecycleError {
     #[error("container id already exists: {id}")]
     ContainerAlreadyExists { id: String },
@@ -64,6 +79,9 @@ pub enum LifecycleError {
 
     #[error("container {id} has no pid")]
     ContainerHasNoPid { id: String },
+
+    #[error("container {id} has no process identity token")]
+    ContainerHasNoProcessIdentity { id: String },
 
     #[error("container {id} did not stop after SIGKILL")]
     StopDidNotComplete { id: String },

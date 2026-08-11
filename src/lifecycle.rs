@@ -16,10 +16,11 @@ use crate::modes::{parse_security_profile, LogMode};
 use crate::namespace::effective_namespace_flags;
 use crate::network::NetworkMode;
 use crate::policy;
+use crate::process_identity::ProcessIdentity;
 use crate::seccomp::capture::CaptureFile;
 use crate::seccomp::{self, SeccompOptions};
 use crate::security::SecurityProfile;
-use crate::signal::{parse_signal, send_signal};
+use crate::signal::parse_signal;
 use crate::spec::config::load_config;
 use crate::state::{self, ContainerState, ContainerStatus, RuntimeMetadata, StartedResources};
 use crate::userns::{validate_process_user, UserNamespaceMode};
@@ -142,9 +143,17 @@ pub fn load_created(id: &str) -> Result<ContainerState> {
 }
 
 pub fn send_container_signal(id: &str, signal: &str) -> Result<KillReport> {
-    let pid = running_pid(id)?;
+    let state = state::load_current(id)?;
+    if state.status != ContainerStatus::Running {
+        return Err(LifecycleError::ContainerNotRunning { id: id.to_string() }.into());
+    }
+
+    let pid = state
+        .pid
+        .ok_or_else(|| LifecycleError::ContainerHasNoPid { id: id.to_string() })?;
     let signal_number = parse_signal(signal)?;
-    send_signal(pid, signal_number)?;
+    let identity = ProcessIdentity::open(pid, state.process_starttime)?;
+    identity.send_signal(signal_number)?;
 
     Ok(KillReport {
         id: id.to_string(),
@@ -193,6 +202,7 @@ pub fn exec(id: &str, args: &[String], tty: bool) -> Result<ExecReport> {
 
     let exit = exec_in_container(ExecConfig {
         target_pid: pid,
+        target_starttime: state.process_starttime,
         args,
         env: &config.process.env,
         cwd: config.process.cwd.as_deref(),
@@ -305,17 +315,6 @@ pub fn wait_for_stopped(id: &str, timeout: Duration) -> Result<bool> {
 
         thread::sleep(Duration::from_millis(100));
     }
-}
-
-pub fn running_pid(id: &str) -> Result<i32> {
-    let state = state::load_current(id)?;
-    if state.status != ContainerStatus::Running {
-        return Err(LifecycleError::ContainerNotRunning { id: id.to_string() }.into());
-    }
-
-    state
-        .pid
-        .ok_or_else(|| LifecycleError::ContainerHasNoPid { id: id.to_string() }.into())
 }
 
 fn ensure_container_absent(id: &str) -> Result<()> {

@@ -119,6 +119,7 @@ pub fn run_once(id: &str) -> Result<HealthResult> {
         attempts += 1;
         let current_exit = exec_in_container(ExecConfig {
             target_pid: pid,
+            target_starttime: state.process_starttime,
             args: &args,
             env: &config.process.env,
             cwd: config.process.cwd.as_deref(),

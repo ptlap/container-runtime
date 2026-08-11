@@ -5,6 +5,7 @@ use crate::container::pty::{
 };
 use crate::error::ContainerError;
 use crate::fd::set_cloexec;
+use crate::process_identity::ProcessIdentity;
 use crate::seccomp::{Program, SeccompPlan};
 use crate::security::{self, SecurityProfile};
 use crate::spec::config::ProcessUser;
@@ -33,6 +34,7 @@ const NAMESPACES: [(&str, CloneFlags); 6] = [
 #[derive(Debug, Clone)]
 pub struct ExecConfig<'a> {
     pub target_pid: i32,
+    pub target_starttime: Option<u64>,
     pub args: &'a [String],
     pub env: &'a [String],
     pub cwd: Option<&'a str>,
@@ -133,7 +135,8 @@ pub fn exec_in_container(config: ExecConfig<'_>) -> Result<ExecExit> {
 }
 
 fn run_namespace_helper(config: ExecConfig<'_>, pty_manager: Option<PtyManager>) -> Result<()> {
-    join_namespaces(config.target_pid)?;
+    let identity = ProcessIdentity::open(config.target_pid, config.target_starttime)?;
+    join_namespaces(&identity)?;
 
     match unsafe { fork() }.context("failed to fork exec process")? {
         ForkResult::Child => {
@@ -185,7 +188,8 @@ fn is_same_namespace(ns_name: &str, target_pid: i32) -> bool {
     }
 }
 
-fn join_namespaces(target_pid: i32) -> Result<()> {
+fn join_namespaces(identity: &ProcessIdentity) -> Result<()> {
+    let target_pid = identity.pid();
     let mut namespace_files = Vec::new();
     for (namespace, flag) in NAMESPACES {
         if namespace == "user" && is_same_namespace("user", target_pid) {
@@ -197,6 +201,8 @@ fn join_namespaces(target_pid: i32) -> Result<()> {
         set_cloexec(&file).with_context(|| format!("failed to mark namespace CLOEXEC: {path}"))?;
         namespace_files.push((path, file, flag));
     }
+
+    identity.verify()?;
 
     for (path, file, flag) in namespace_files {
         setns(&file, flag).with_context(|| format!("failed to join namespace: {path}"))?;
@@ -309,6 +315,7 @@ mod tests {
     fn rejects_empty_exec_args_with_typed_error() {
         let config = ExecConfig {
             target_pid: 1,
+            target_starttime: None,
             args: &[],
             env: &[],
             cwd: None,
