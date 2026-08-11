@@ -2,7 +2,7 @@
 //!
 //! The runtime builds three kinds of filter:
 //!
-//! * the fixed denylist behind `--security default`,
+//! * the fixed denylist behind `--security denylist`,
 //! * a trace-everything filter used while learning a workload's syscall set,
 //! * an allowlist compiled from a generated profile.
 

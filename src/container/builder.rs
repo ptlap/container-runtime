@@ -255,7 +255,7 @@ impl<'a> ProcessConfigBuilder<'a> {
             flags: self.flags,
             cgroup_config: self.cgroup_config,
             network_mode: self.network_mode.unwrap_or(NetworkMode::None),
-            security_profile: self.security_profile.unwrap_or(SecurityProfile::Default),
+            security_profile: self.security_profile.unwrap_or(SecurityProfile::Denylist),
             userns_mode: self.userns_mode.unwrap_or(UserNamespaceMode::Host),
             tty: self.tty,
             seccomp_mode: self.seccomp_mode,
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(config.env, &[] as &[String]);
         assert!(config.mounts.is_empty());
         assert_eq!(config.network_mode, NetworkMode::None);
-        assert_eq!(config.security_profile, SecurityProfile::Default);
+        assert_eq!(config.security_profile, SecurityProfile::Denylist);
         assert_eq!(config.userns_mode, UserNamespaceMode::Host);
     }
 }

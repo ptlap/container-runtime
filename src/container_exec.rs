@@ -321,7 +321,7 @@ mod tests {
             cwd: None,
             process_user: None,
             private_userns: false,
-            security_profile: SecurityProfile::Default,
+            security_profile: SecurityProfile::Denylist,
             cgroup_path: None,
             tty: false,
             seccomp_program: None,

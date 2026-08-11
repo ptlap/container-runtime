@@ -84,7 +84,7 @@ Objective: make security posture visible and demo-friendly.
 Pass:
 
 ```bash
-sudo target/release/crun run --net none --security default sec-demo examples/bundle
+sudo target/release/crun run --net none --security denylist sec-demo examples/bundle
 sudo target/release/crun inspect-security sec-demo --json
 sudo target/release/crun delete sec-demo
 ```
@@ -245,8 +245,8 @@ Objective: produce repeatable performance evidence.
 Pass:
 
 ```bash
-sudo scripts/benchmark.sh --iterations 30 --net none --security default --json
-sudo scripts/benchmark.sh --iterations 30 --net bridge --security default --json
+sudo scripts/benchmark.sh --iterations 30 --net none --security denylist --json
+sudo scripts/benchmark.sh --iterations 30 --net bridge --security denylist --json
 ```
 
 ## Goal 13: Reproducible Bundle Bootstrap
@@ -305,7 +305,7 @@ Pass:
 
 ```bash
 cargo test state
-sudo scripts/benchmark.sh --iterations 30 --net none --security default --json
+sudo scripts/benchmark.sh --iterations 30 --net none --security denylist --json
 ```
 
 ## Goal 16: OCI Filesystem Mounts
@@ -337,7 +337,7 @@ sits on.
 - [x] Emit profiles in the OCI `linux.seccomp` schema with `crunMetadata`.
 - [x] Compile allowlists, guarding foreign architectures and the x32 ABI.
 - [x] Order the comparison chain by observed frequency.
-- [x] Keep the existing denylist behaviour behind `--security default`.
+- [x] Keep the existing denylist behaviour behind `--security denylist`.
 
 Pass:
 

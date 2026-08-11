@@ -628,7 +628,7 @@ mod tests {
             Path::new("/tmp/bundle"),
             RuntimeMetadata {
                 network_mode: "none",
-                security_profile: "default",
+                security_profile: "denylist",
                 log_mode: "off",
                 userns_mode: "host",
                 userns_map: None,
@@ -728,7 +728,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let metadata = RuntimeMetadata {
             network_mode: "none",
-            security_profile: "default",
+            security_profile: "denylist",
             log_mode: "on",
             userns_mode: "private",
             userns_map: Some(UserNamespaceMap {
@@ -777,7 +777,7 @@ mod tests {
             Some("/run/crun-rs/demo/container.log")
         );
         assert_eq!(loaded.log_mode, "on");
-        assert_eq!(loaded.security_profile, "default");
+        assert_eq!(loaded.security_profile, "denylist");
         assert_eq!(loaded.userns_mode, "private");
         assert_eq!(loaded.rootfs_mode, "overlay");
         assert_eq!(loaded.policy_profile, "restricted");
@@ -823,7 +823,7 @@ mod tests {
             Path::new("/tmp/bundle"),
             RuntimeMetadata {
                 network_mode: "none",
-                security_profile: "default",
+                security_profile: "denylist",
                 log_mode: "auto",
                 userns_mode: "host",
                 userns_map: None,
@@ -850,7 +850,7 @@ mod tests {
             Some("/run/crun-rs/demo-created/container.log")
         );
         assert_eq!(loaded.log_mode, "auto");
-        assert_eq!(loaded.security_profile, "default");
+        assert_eq!(loaded.security_profile, "denylist");
         assert_eq!(loaded.userns_mode, "host");
         assert_eq!(loaded.rootfs_mode, "direct");
         assert_eq!(loaded.policy_profile, "none");
@@ -869,7 +869,7 @@ mod tests {
             Path::new("/tmp/beta"),
             RuntimeMetadata {
                 network_mode: "bridge",
-                security_profile: "default",
+                security_profile: "denylist",
                 log_mode: "auto",
                 userns_mode: "host",
                 userns_map: None,
@@ -889,7 +889,7 @@ mod tests {
             Path::new("/tmp/alpha"),
             RuntimeMetadata {
                 network_mode: "none",
-                security_profile: "default",
+                security_profile: "denylist",
                 log_mode: "auto",
                 userns_mode: "host",
                 userns_map: None,
@@ -937,7 +937,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let metadata = RuntimeMetadata {
             network_mode: "none",
-            security_profile: "default",
+            security_profile: "denylist",
             log_mode: "auto",
             userns_mode: "host",
             userns_map: None,
@@ -985,7 +985,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let metadata = RuntimeMetadata {
             network_mode: "none",
-            security_profile: "default",
+            security_profile: "denylist",
             log_mode: "auto",
             userns_mode: "host",
             userns_map: None,

@@ -235,7 +235,7 @@ impl<'a> ChildConfigBuilder<'a> {
             masked_paths: self.masked_paths.unwrap_or(&[]),
             readonly_paths: self.readonly_paths.unwrap_or(&[]),
             network_mode: self.network_mode.unwrap_or(NetworkMode::None),
-            security_profile: self.security_profile.unwrap_or(SecurityProfile::Default),
+            security_profile: self.security_profile.unwrap_or(SecurityProfile::Denylist),
             userns_mode: self.userns_mode.unwrap_or(UserNamespaceMode::Host),
             child_flags: self.child_flags,
             is_rootless: self.is_rootless,

@@ -408,7 +408,7 @@ mod tests {
             },
             RuntimeMetadata {
                 network_mode: "none",
-                security_profile: "default",
+                security_profile: "denylist",
                 log_mode: "off",
                 userns_mode: "host",
                 userns_map: None,

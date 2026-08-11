@@ -50,7 +50,7 @@ restored.
 ## Benchmark
 
 ```bash
-sudo scripts/benchmark.sh --iterations 30 --net none --security default
+sudo scripts/benchmark.sh --iterations 30 --net none --security denylist
 ```
 
 The benchmark script creates a temporary bundle that runs `/bin/sh -c "exit 0"`,
@@ -60,13 +60,13 @@ bridge` to include veth and NAT setup overhead.
 ## Run
 
 ```bash
-sudo target/release/crun run --net bridge --security default demo examples/bundle
+sudo target/release/crun run --net bridge --security denylist demo examples/bundle
 ```
 
 Lifecycle form:
 
 ```bash
-sudo target/release/crun create --net bridge --security default demo examples/bundle
+sudo target/release/crun create --net bridge --security denylist demo examples/bundle
 sudo target/release/crun state demo --json
 sudo target/release/crun start demo
 ```

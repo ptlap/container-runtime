@@ -33,7 +33,7 @@ the older build. `--compat` unions in that set at the cost of a slightly wider
 surface, and the two counts are reported separately.
 
 **The learned set is a subset of what the security profile permits.** Under
-`--security default --seccomp learn` the 16 denylisted syscalls return EPERM
+`--security denylist --seccomp learn` the 16 denylisted syscalls return EPERM
 before reaching the tracer, so they can never enter a generated profile. That is
 intended, but it means the numbers describe "syscalls the workload used that the
 denylist allowed", not "syscalls the workload attempted".

@@ -45,7 +45,7 @@ enum Command {
     Run {
         #[arg(long, value_enum, default_value_t = CliNetworkMode::Bridge)]
         net: CliNetworkMode,
-        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Default)]
+        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Denylist)]
         security: CliSecurityProfile,
         #[arg(long, value_enum, default_value_t = CliLogMode::Auto)]
         log: CliLogMode,
@@ -71,7 +71,7 @@ enum Command {
     RunImage {
         #[arg(long, value_enum, default_value_t = CliNetworkMode::Bridge)]
         net: CliNetworkMode,
-        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Default)]
+        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Denylist)]
         security: CliSecurityProfile,
         #[arg(long, value_enum, default_value_t = CliLogMode::Auto)]
         log: CliLogMode,
@@ -97,7 +97,7 @@ enum Command {
     Create {
         #[arg(long, value_enum, default_value_t = CliNetworkMode::Bridge)]
         net: CliNetworkMode,
-        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Default)]
+        #[arg(long, value_enum, default_value_t = CliSecurityProfile::Denylist)]
         security: CliSecurityProfile,
         #[arg(long, value_enum, default_value_t = CliLogMode::Auto)]
         log: CliLogMode,
@@ -317,7 +317,8 @@ enum CliNetworkMode {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliSecurityProfile {
-    Default,
+    #[value(name = "denylist", alias = "default")]
+    Denylist,
     Unconfined,
 }
 
@@ -427,7 +428,7 @@ impl From<CliNetworkMode> for NetworkMode {
 impl From<CliSecurityProfile> for SecurityProfile {
     fn from(value: CliSecurityProfile) -> Self {
         match value {
-            CliSecurityProfile::Default => Self::Default,
+            CliSecurityProfile::Denylist => Self::Denylist,
             CliSecurityProfile::Unconfined => Self::Unconfined,
         }
     }

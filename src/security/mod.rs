@@ -29,14 +29,14 @@ struct CapUserData {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SecurityProfile {
-    Default,
+    Denylist,
     Unconfined,
 }
 
 impl SecurityProfile {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Default => "default",
+            Self::Denylist => "denylist",
             Self::Unconfined => "unconfined",
         }
     }
@@ -50,14 +50,14 @@ impl SecurityProfile {
 /// otherwise `--security unconfined --seccomp enforce` would depend on the
 /// runtime happening to run as root.
 pub fn apply(profile: SecurityProfile, plan: SeccompPlan<'_>) -> Result<()> {
-    if profile == SecurityProfile::Default || !plan.is_none() {
+    if profile == SecurityProfile::Denylist || !plan.is_none() {
         prctl::set_no_new_privs().context("failed to enable no_new_privs")?;
     }
 
-    if profile == SecurityProfile::Default {
-        drop_capabilities().context("failed to drop capabilities for default security profile")?;
+    if profile == SecurityProfile::Denylist {
+        drop_capabilities().context("failed to drop capabilities for denylist security profile")?;
         install_seccomp_filter()
-            .context("failed to install seccomp filter for default security profile")?;
+            .context("failed to install seccomp filter for denylist security profile")?;
     }
 
     match plan {
@@ -111,7 +111,7 @@ fn install_seccomp_filter() -> Result<()> {
 }
 
 /// Denies a fixed set of host-impacting syscalls and lets everything else
-/// through. This is the historical `--security default` behaviour; the
+/// through. This is the historical `--security denylist` behaviour; the
 /// generated allowlists live in [`crate::seccomp`].
 fn seccomp_denylist_filter() -> Result<Program> {
     arch::ensure_supported()?;
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn formats_security_profiles_for_state() {
-        assert_eq!(SecurityProfile::Default.as_str(), "default");
+        assert_eq!(SecurityProfile::Denylist.as_str(), "denylist");
         assert_eq!(SecurityProfile::Unconfined.as_str(), "unconfined");
     }
 

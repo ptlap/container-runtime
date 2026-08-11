@@ -118,7 +118,7 @@ run_once() {
 
     case "$arm" in
         unconfined) extra=(--security unconfined) ;;
-        crun-default) extra=(--security default) ;;
+        crun-default) extra=(--security denylist) ;;
         learn)
             extra=(--security unconfined --seccomp learn
                    --seccomp-out "$RESULT_DIR/captures/${workload}-${iteration}.json")
