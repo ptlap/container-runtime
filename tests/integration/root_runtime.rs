@@ -561,6 +561,41 @@ fn private_userns_accepts_explicit_root_credentials() {
 
 #[test]
 #[ignore = "requires root"]
+fn denylist_run_applies_base_security_profile() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-denylist-run");
+    let bundle = TestBundle::new(
+        "bundle-denylist-run",
+        &[
+            "/bin/sh",
+            "-c",
+            "grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/self/status && ! mount -t tmpfs tmpfs /tmp",
+        ],
+        "",
+    )
+    .expect("bundle should be created");
+
+    let output = run_crun(&[
+        "run",
+        "--net",
+        "none",
+        "--security",
+        "denylist",
+        "--log",
+        "on",
+        &id,
+        bundle.path.to_str().expect("bundle path should be utf8"),
+    ]);
+    assert_success(&output);
+    assert_success(&run_crun(&["delete", &id]));
+}
+
+#[test]
+#[ignore = "requires root"]
 fn exec_preserves_uid_capability_drop_and_default_seccomp() {
     if !require_root() {
         return;
@@ -625,6 +660,34 @@ fn run_state_delete_smoke() {
     let state = json_stdout(&state);
     assert_eq!(state["status"], "stopped");
     assert_success(&run_crun(&["delete", &id]));
+}
+
+#[test]
+#[ignore = "requires root"]
+fn healthcheck_keeps_base_denylist_security() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-health-denylist");
+    let bundle = TestBundle::new(
+        "bundle-health-denylist",
+        &["/bin/sh", "-c", "sleep 60"],
+        r#""healthcheck": {
+    "test": ["CMD", "/bin/sh", "-c", "grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/self/status && ! mount -t tmpfs tmpfs /tmp"],
+    "timeout": "2s",
+    "retries": 0
+  }"#,
+    )
+    .expect("bundle should be created");
+    let _running = RunningContainer::start_with_security(id.clone(), &bundle.path, "denylist");
+
+    let health = run_crun(&["health", &id, "--json"]);
+    assert_success(&health);
+    let health = json_stdout(&health);
+    assert_eq!(health["status"], "healthy");
+    assert_eq!(health["attempts"], 1);
 }
 
 #[test]
