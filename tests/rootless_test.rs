@@ -40,7 +40,9 @@ mod seccomp_cli {
     fn minicrun() -> PathBuf {
         std::env::var_os("CARGO_BIN_EXE_minicrun")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/minicrun"))
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/minicrun")
+            })
     }
 
     fn repo_root() -> PathBuf {
