@@ -1,8 +1,9 @@
 use crate::network::NetworkMode;
 use crate::userns::UserNamespaceMode;
+use anyhow::{bail, Result};
 use nix::sched::CloneFlags;
 
-pub fn namespace_flags<S: AsRef<str>>(namespaces: &[S]) -> CloneFlags {
+pub fn namespace_flags<S: AsRef<str>>(namespaces: &[S]) -> Result<CloneFlags> {
     let mut flags = CloneFlags::empty();
 
     for namespace in namespaces {
@@ -13,21 +14,21 @@ pub fn namespace_flags<S: AsRef<str>>(namespaces: &[S]) -> CloneFlags {
             "ipc" => flags |= CloneFlags::CLONE_NEWIPC,
             "network" => flags |= CloneFlags::CLONE_NEWNET,
             "user" => flags |= CloneFlags::CLONE_NEWUSER,
-            _ => {}
+            unsupported => bail!("unsupported OCI Linux namespace type: {unsupported}"),
         }
     }
 
-    flags
+    Ok(flags)
 }
 
 pub fn effective_namespace_flags<S: AsRef<str>>(
     namespaces: &[S],
     network_mode: NetworkMode,
     userns_mode: UserNamespaceMode,
-) -> CloneFlags {
-    let flags = namespace_flags(namespaces);
+) -> Result<CloneFlags> {
+    let flags = namespace_flags(namespaces)?;
     let flags = apply_network_mode(flags, network_mode);
-    apply_userns_mode(flags, userns_mode)
+    Ok(apply_userns_mode(flags, userns_mode))
 }
 
 fn apply_network_mode(mut flags: CloneFlags, network_mode: NetworkMode) -> CloneFlags {
@@ -58,7 +59,8 @@ mod tests {
 
     #[test]
     fn maps_supported_namespaces_to_clone_flags() {
-        let flags = namespace_flags(&names(&["pid", "mount", "uts", "ipc", "network", "user"]));
+        let flags = namespace_flags(&names(&["pid", "mount", "uts", "ipc", "network", "user"]))
+            .expect("supported namespaces should map");
 
         assert!(flags.contains(CloneFlags::CLONE_NEWPID));
         assert!(flags.contains(CloneFlags::CLONE_NEWNS));
@@ -69,11 +71,8 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unknown_namespaces() {
-        let flags = namespace_flags(&names(&["pid", "unsupported"]));
-
-        assert!(flags.contains(CloneFlags::CLONE_NEWPID));
-        assert!(!flags.contains(CloneFlags::CLONE_NEWNS));
+    fn rejects_unknown_namespaces() {
+        assert!(namespace_flags(&names(&["pid", "unsupported"])).is_err());
     }
 
     #[test]
@@ -82,7 +81,8 @@ mod tests {
             &names(&["pid", "network", "user"]),
             NetworkMode::Host,
             UserNamespaceMode::Host,
-        );
+        )
+        .expect("supported namespaces should map");
 
         assert!(flags.contains(CloneFlags::CLONE_NEWPID));
         assert!(!flags.contains(CloneFlags::CLONE_NEWNET));
@@ -95,7 +95,8 @@ mod tests {
                 host_uid: 1000,
                 host_gid: 1000,
             }),
-        );
+        )
+        .expect("supported namespaces should map");
 
         assert!(flags.contains(CloneFlags::CLONE_NEWPID));
         assert!(flags.contains(CloneFlags::CLONE_NEWNET));

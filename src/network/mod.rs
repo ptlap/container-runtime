@@ -1,3 +1,4 @@
+use crate::command::{self, CommandError, EXTERNAL_COMMAND_TIMEOUT};
 use crate::error::NetworkError;
 use anyhow::{Context, Result};
 use nix::unistd::Pid;
@@ -5,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
@@ -59,15 +60,28 @@ pub struct BridgeNetwork {
     pub gateway: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NatLease {
+    pub subnet: String,
+    pub postrouting_owned: bool,
+    pub forward_source_owned: bool,
+    pub forward_destination_owned: bool,
+    pub previous_ip_forward: Option<String>,
+}
+
 impl BridgeNetwork {
     pub fn for_pid(pid: i32) -> Self {
         let octet = bridge_octet(pid);
-        Self::for_octet(pid, octet)
+        Self::for_octet(VethPair::for_pid(pid), octet)
     }
 
-    fn for_octet(pid: i32, octet: u8) -> Self {
+    fn for_container_id(container_id: &str, octet: u8) -> Self {
+        Self::for_octet(VethPair::for_container_id(container_id), octet)
+    }
+
+    fn for_octet(veth: VethPair, octet: u8) -> Self {
         Self {
-            veth: VethPair::for_pid(pid),
+            veth,
             subnet: format!("10.88.{octet}.0/24"),
             host_cidr: format!("10.88.{octet}.1/24"),
             container_cidr: format!("10.88.{octet}.2/24"),
@@ -84,6 +98,8 @@ struct BridgeAllocations {
 #[derive(Debug, Serialize, Deserialize)]
 struct AllocationLockOwner {
     owner_pid: u32,
+    #[serde(default)]
+    owner_starttime: Option<u64>,
     created_at_unix: u64,
 }
 
@@ -109,6 +125,23 @@ impl VethPair {
             peer_name: format!("vethp{pid}"),
         }
     }
+
+    pub fn for_container_id(container_id: &str) -> Self {
+        let token = stable_veth_token(container_id);
+        Self {
+            host_name: format!("vethh{token}"),
+            peer_name: format!("vethp{token}"),
+        }
+    }
+}
+
+fn stable_veth_token(container_id: &str) -> String {
+    let mut hash = 2_166_136_261u32;
+    for byte in container_id.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    format!("{hash:08x}")
 }
 
 fn bridge_octet(pid: i32) -> u8 {
@@ -126,13 +159,13 @@ pub fn release_bridge_network(container_id: &str) -> Result<()> {
 fn allocate_bridge_network_from(
     root: &Path,
     container_id: &str,
-    pid: i32,
+    _pid: i32,
 ) -> Result<BridgeNetwork> {
     let _lock = acquire_allocation_lock(root)?;
     let mut allocations = read_allocations(root)?;
 
     if let Some(octet) = allocations.containers.get(container_id).copied() {
-        return Ok(BridgeNetwork::for_octet(pid, octet));
+        return Ok(BridgeNetwork::for_container_id(container_id, octet));
     }
 
     let octet = next_free_bridge_octet(&allocations)?;
@@ -141,7 +174,7 @@ fn allocate_bridge_network_from(
         .insert(container_id.to_string(), octet);
     save_allocations(root, &allocations)?;
 
-    Ok(BridgeNetwork::for_octet(pid, octet))
+    Ok(BridgeNetwork::for_container_id(container_id, octet))
 }
 
 fn release_bridge_network_from(root: &Path, container_id: &str) -> Result<()> {
@@ -221,8 +254,13 @@ fn acquire_allocation_lock(root: &Path) -> Result<AllocationLock> {
 }
 
 fn write_lock_owner(path: &Path) -> Result<()> {
+    let owner_pid = std::process::id();
     let owner = AllocationLockOwner {
-        owner_pid: std::process::id(),
+        owner_pid,
+        owner_starttime: crate::state::process_starttime(
+            i32::try_from(owner_pid).unwrap_or(i32::MAX),
+        )
+        .ok(),
         created_at_unix: unix_timestamp()?,
     };
     let content = serde_json::to_string_pretty(&owner).context("failed to serialize lock owner")?;
@@ -249,8 +287,16 @@ fn remove_stale_allocation_lock(path: &Path) -> Result<()> {
 
 fn allocation_lock_is_stale(path: &Path) -> Result<bool> {
     let owner = read_lock_owner(path)?;
+    if owner.owner_pid == 0 {
+        return Ok(true);
+    }
 
-    if !pid_exists(owner.owner_pid) {
+    let current_starttime =
+        crate::state::process_starttime(i32::try_from(owner.owner_pid).unwrap_or(i32::MAX)).ok();
+    if let Some(expected) = owner.owner_starttime {
+        return Ok(current_starttime != Some(expected));
+    }
+    if current_starttime.is_none() {
         return Ok(true);
     }
 
@@ -266,6 +312,7 @@ fn read_lock_owner(path: &Path) -> Result<AllocationLockOwner> {
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AllocationLockOwner {
             owner_pid: 0,
+            owner_starttime: None,
             created_at_unix: 0,
         }),
         Err(error) => Err(error).with_context(|| {
@@ -275,14 +322,6 @@ fn read_lock_owner(path: &Path) -> Result<AllocationLockOwner> {
             )
         }),
     }
-}
-
-fn pid_exists(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-
-    Path::new("/proc").join(pid.to_string()).exists()
 }
 
 fn unix_timestamp() -> Result<u64> {
@@ -305,8 +344,6 @@ pub fn setup_loopback() -> Result<()> {
 }
 
 pub fn setup_veth_parent(child_pid: Pid, network: &BridgeNetwork) -> Result<()> {
-    run_ip_quiet(&["link", "delete", &network.veth.host_name]).ok();
-
     run_ip(&[
         "link",
         "add",
@@ -360,112 +397,141 @@ pub fn setup_veth_child(network: &BridgeNetwork) -> Result<()> {
 }
 
 pub fn cleanup_veth_host(host_name: &str) -> Result<()> {
-    if run_ip_quiet(&["link", "show", host_name]).is_err() {
+    if !link_exists(host_name)? {
         return Ok(());
     }
 
     run_ip_quiet(&["link", "delete", host_name])
 }
 
-fn run_ip(args: &[&str]) -> Result<()> {
-    let status = Command::new("ip")
-        .args(args)
-        .status()
-        .with_context(|| format!("failed to execute ip {}", args.join(" ")))?;
-
-    if !status.success() {
-        return Err(NetworkError::CommandFailed {
-            program: "ip",
-            args: args.join(" "),
-        }
-        .into());
+fn link_exists(name: &str) -> Result<bool> {
+    let mut command = Command::new("ip");
+    command.args(["-o", "link", "show", name]);
+    let description = format!("ip -o link show {name}");
+    let output = command::output(command, description, EXTERNAL_COMMAND_TIMEOUT).map_err(
+        |error| match error {
+            CommandError::TimedOut { timeout_ms, .. } => {
+                anyhow::Error::new(NetworkError::CommandTimedOut {
+                    program: "ip",
+                    args: format!("-o link show {name}"),
+                    timeout_ms,
+                })
+            }
+            error => anyhow::Error::new(error),
+        },
+    )?;
+    if output.status.success() {
+        return Ok(true);
     }
+    if output.status.code() == Some(1) {
+        return Ok(false);
+    }
+    Err(NetworkError::CommandFailed {
+        program: "ip",
+        args: format!("-o link show {name}"),
+    }
+    .into())
+}
 
-    Ok(())
+fn run_ip(args: &[&str]) -> Result<()> {
+    run_network_command("ip", args)
 }
 
 fn run_ip_quiet(args: &[&str]) -> Result<()> {
-    let status = Command::new("ip")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to execute ip {}", args.join(" ")))?;
-
-    if !status.success() {
-        return Err(NetworkError::CommandFailed {
-            program: "ip",
-            args: args.join(" "),
-        }
-        .into());
-    }
-
-    Ok(())
+    run_network_command("ip", args)
 }
 
-pub fn setup_nat(subnet: &str) -> Result<()> {
-    fs::write("/proc/sys/net/ipv4/ip_forward", "1").context("failed to enable ipv4 forwarding")?;
+pub fn setup_nat(subnet: &str) -> Result<NatLease> {
+    let previous_ip_forward = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")
+        .ok()
+        .map(|value| value.trim().to_string());
+    if previous_ip_forward.as_deref() != Some("1") {
+        fs::write("/proc/sys/net/ipv4/ip_forward", "1")
+            .context("failed to enable ipv4 forwarding")?;
+    }
 
-    run_iptables_quiet(&[
-        "-t",
-        "nat",
-        "-D",
-        "POSTROUTING",
-        "-s",
-        subnet,
-        "-j",
-        "MASQUERADE",
-    ])
-    .ok();
+    let mut lease = NatLease {
+        subnet: subnet.to_string(),
+        postrouting_owned: false,
+        forward_source_owned: false,
+        forward_destination_owned: false,
+        previous_ip_forward,
+    };
 
-    run_iptables(&[
-        "-t",
-        "nat",
-        "-A",
-        "POSTROUTING",
-        "-s",
-        subnet,
-        "-j",
-        "MASQUERADE",
-    ])?;
+    let setup = (|| {
+        lease.postrouting_owned = ensure_iptables_rule(&[
+            "-t",
+            "nat",
+            "-A",
+            "POSTROUTING",
+            "-s",
+            subnet,
+            "-j",
+            "MASQUERADE",
+        ])?;
+        lease.forward_source_owned =
+            ensure_iptables_rule(&["-A", "FORWARD", "-s", subnet, "-j", "ACCEPT"])?;
+        lease.forward_destination_owned =
+            ensure_iptables_rule(&["-A", "FORWARD", "-d", subnet, "-j", "ACCEPT"])?;
+        Ok::<(), anyhow::Error>(())
+    })();
 
-    run_iptables_quiet(&["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"]).ok();
-    run_iptables_quiet(&["-D", "FORWARD", "-d", subnet, "-j", "ACCEPT"]).ok();
+    if let Err(setup_error) = setup {
+        return Err(match cleanup_nat_lease(&lease) {
+            Ok(()) => setup_error,
+            Err(cleanup_error) => anyhow::anyhow!(
+                "NAT setup failed: {setup_error}; NAT rollback failed: {cleanup_error}"
+            ),
+        });
+    }
 
-    run_iptables(&["-A", "FORWARD", "-s", subnet, "-j", "ACCEPT"])?;
-    run_iptables(&["-A", "FORWARD", "-d", subnet, "-j", "ACCEPT"])?;
+    Ok(lease)
+}
 
-    Ok(())
+fn ensure_iptables_rule(add_args: &[&str]) -> Result<bool> {
+    let mut check_args = add_args.to_vec();
+    let action_index = check_args
+        .iter()
+        .position(|arg| *arg == "-A")
+        .context("iptables rule is missing append action")?;
+    check_args[action_index] = "-C";
+
+    if run_iptables_quiet(&check_args).is_ok() {
+        return Ok(false);
+    }
+
+    run_iptables(add_args)?;
+    Ok(true)
 }
 
 fn run_iptables(args: &[&str]) -> Result<()> {
-    let status = Command::new("iptables")
-        .args(args)
-        .status()
-        .with_context(|| format!("failed to execute iptables {}", args.join(" ")))?;
-
-    if !status.success() {
-        return Err(NetworkError::CommandFailed {
-            program: "iptables",
-            args: args.join(" "),
-        }
-        .into());
-    }
-
-    Ok(())
+    run_network_command("iptables", args)
 }
 
 fn run_iptables_quiet(args: &[&str]) -> Result<()> {
-    let status = Command::new("iptables")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to execute iptables {}", args.join(" ")))?;
+    run_network_command("iptables", args)
+}
+
+fn run_network_command(program: &'static str, args: &[&str]) -> Result<()> {
+    let mut command = Command::new(program);
+    command.args(args);
+    let description = format!("{program} {}", args.join(" "));
+    let status = command::status(command, description, EXTERNAL_COMMAND_TIMEOUT).map_err(
+        |error| match error {
+            CommandError::TimedOut { timeout_ms, .. } => {
+                anyhow::Error::new(NetworkError::CommandTimedOut {
+                    program,
+                    args: args.join(" "),
+                    timeout_ms,
+                })
+            }
+            error => anyhow::Error::new(error),
+        },
+    )?;
 
     if !status.success() {
         return Err(NetworkError::CommandFailed {
-            program: "iptables",
+            program,
             args: args.join(" "),
         }
         .into());
@@ -474,24 +540,63 @@ fn run_iptables_quiet(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+pub fn cleanup_nat_lease(lease: &NatLease) -> Result<()> {
+    let mut errors = Vec::new();
+    if lease.postrouting_owned {
+        if let Err(error) = run_iptables_quiet(&[
+            "-t",
+            "nat",
+            "-D",
+            "POSTROUTING",
+            "-s",
+            &lease.subnet,
+            "-j",
+            "MASQUERADE",
+        ]) {
+            errors.push(format!("POSTROUTING cleanup failed: {error}"));
+        }
+    }
+    if lease.forward_source_owned {
+        if let Err(error) =
+            run_iptables_quiet(&["-D", "FORWARD", "-s", &lease.subnet, "-j", "ACCEPT"])
+        {
+            errors.push(format!("FORWARD source cleanup failed: {error}"));
+        }
+    }
+    if lease.forward_destination_owned {
+        if let Err(error) =
+            run_iptables_quiet(&["-D", "FORWARD", "-d", &lease.subnet, "-j", "ACCEPT"])
+        {
+            errors.push(format!("FORWARD destination cleanup failed: {error}"));
+        }
+    }
+    if let Some(previous) = lease.previous_ip_forward.as_deref() {
+        if previous != "1" {
+            if let Err(error) = fs::write("/proc/sys/net/ipv4/ip_forward", previous)
+                .context("failed to restore ipv4 forwarding")
+            {
+                errors.push(error.to_string());
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
+    }
+}
+
+/// Legacy cleanup for callers without an ownership token. New lifecycle code
+/// must use `cleanup_nat_lease` so pre-existing administrator rules are preserved.
 pub fn cleanup_nat(subnet: &str) -> Result<()> {
-    while run_iptables_quiet(&[
-        "-t",
-        "nat",
-        "-D",
-        "POSTROUTING",
-        "-s",
-        subnet,
-        "-j",
-        "MASQUERADE",
-    ])
-    .is_ok()
-    {}
-
-    while run_iptables_quiet(&["-D", "FORWARD", "-s", subnet, "-j", "ACCEPT"]).is_ok() {}
-    while run_iptables_quiet(&["-D", "FORWARD", "-d", subnet, "-j", "ACCEPT"]).is_ok() {}
-
-    Ok(())
+    cleanup_nat_lease(&NatLease {
+        subnet: subnet.to_string(),
+        postrouting_owned: true,
+        forward_source_owned: true,
+        forward_destination_owned: true,
+        previous_ip_forward: None,
+    })
 }
 
 #[cfg(test)]
@@ -518,6 +623,40 @@ mod tests {
         assert_eq!(network.host_cidr, "10.88.165.1/24");
         assert_eq!(network.container_cidr, "10.88.165.2/24");
         assert_eq!(network.gateway, "10.88.165.1");
+    }
+
+    #[test]
+    fn stable_veth_names_do_not_depend_on_pid() {
+        let first = VethPair::for_container_id("container-alpha");
+        let same = VethPair::for_container_id("container-alpha");
+        let other = VethPair::for_container_id("container-beta");
+
+        assert_eq!(first, same);
+        assert_ne!(first, other);
+        assert!(first.host_name.len() <= 15);
+        assert!(first.peer_name.len() <= 15);
+    }
+
+    #[test]
+    fn allocation_lock_starttime_detects_pid_reuse() {
+        let root =
+            std::env::temp_dir().join(format!("crun-rs-lock-identity-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let lock = root.join("allocations.lock");
+        fs::create_dir_all(&lock).expect("create lock directory");
+        let pid = std::process::id();
+        let starttime = crate::state::process_starttime(i32::try_from(pid).expect("pid fits"))
+            .expect("current process starttime should exist");
+        let owner = AllocationLockOwner {
+            owner_pid: pid,
+            owner_starttime: Some(starttime + 1),
+            created_at_unix: unix_timestamp().expect("clock should be available"),
+        };
+        let content = serde_json::to_string_pretty(&owner).expect("serialize lock owner");
+        fs::write(lock_owner_file(&lock), format!("{content}\n")).expect("write lock owner");
+
+        assert!(allocation_lock_is_stale(&lock).expect("lock state should read"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -573,6 +712,7 @@ mod tests {
         fs::create_dir_all(&lock).expect("create stale lock");
         let owner = AllocationLockOwner {
             owner_pid: 0,
+            owner_starttime: None,
             created_at_unix: 1,
         };
         let content = serde_json::to_string_pretty(&owner).expect("serialize owner");

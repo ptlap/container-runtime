@@ -74,23 +74,27 @@ pub fn print_trace_report(report: &TraceReport, json: bool) -> Result<()> {
     if let Some(error) = report.strace.error.as_deref() {
         println!("strace_error: {error}");
     }
-    println!("ebpf: {}", report.ebpf);
+    println!("ebpf_available: {}", report.ebpf_available);
 
     Ok(())
 }
 
 fn print_process_node(node: &ProcessNode, depth: usize) {
     let indent = "  ".repeat(depth);
-    println!("{indent}- {} {}", node.pid, node.command);
+    let truncated = if node.truncated { " [truncated]" } else { "" };
+    println!("{indent}- {} {}{}", node.pid, node.command, truncated);
     for child in &node.children {
         print_process_node(child, depth + 1);
     }
 }
 
-pub fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: u64) -> Result<()> {
-    health::run(id, watch, Duration::from_millis(interval_ms), |result| {
-        print_health_result(&result, json)
-    })
+pub fn run_healthcheck(id: &str, json: bool, watch: bool, interval_ms: Option<u64>) -> Result<()> {
+    health::run(
+        id,
+        watch,
+        interval_ms.map(Duration::from_millis),
+        |result| print_health_result(&result, json),
+    )
 }
 
 fn print_health_result(result: &HealthResult, json: bool) -> Result<()> {

@@ -113,6 +113,7 @@ pub fn compile(
     options: CompileOptions,
 ) -> std::result::Result<CompiledProfile, SeccompError> {
     arch::ensure_supported()?;
+    profile.validate_supported()?;
 
     let names = profile.allowed_names();
     let (mut allowed, unresolved) = syscalls::resolve_all(&names);

@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::audit_log::{self, AuditEvent};
 use crate::container_exec::{exec_in_container, ExecConfig};
 use crate::error::{HealthRunError, HealthcheckError};
+use crate::modes::parse_security_profile;
 use crate::spec::config::load_config;
 use crate::spec::config::Healthcheck;
 use crate::state::{self, ContainerStatus, HealthState};
@@ -54,6 +55,52 @@ pub fn attempts(healthcheck: &Healthcheck) -> u32 {
     healthcheck.retries.unwrap_or(0).saturating_add(1)
 }
 
+pub fn timeout_duration(healthcheck: &Healthcheck) -> Result<Duration, HealthcheckError> {
+    duration_from_config(healthcheck.timeout.as_deref())
+}
+
+pub fn interval_duration(healthcheck: &Healthcheck) -> Result<Duration, HealthcheckError> {
+    duration_from_config(healthcheck.interval.as_deref())
+}
+
+fn duration_from_config(raw: Option<&str>) -> Result<Duration, HealthcheckError> {
+    let Some(raw) = raw else {
+        return Ok(Duration::from_secs(30));
+    };
+    let raw = raw.trim();
+    let split_at = raw
+        .find(|character: char| !character.is_ascii_digit())
+        .ok_or_else(|| HealthcheckError::InvalidTimeout {
+            value: raw.to_string(),
+        })?;
+    let (number, unit) = raw.split_at(split_at);
+    let number = number
+        .parse::<u64>()
+        .map_err(|_| HealthcheckError::InvalidTimeout {
+            value: raw.to_string(),
+        })?;
+    let multiplier = match unit {
+        "ns" => 1,
+        "us" | "µs" => 1_000,
+        "ms" => 1_000_000,
+        "s" => 1_000_000_000,
+        "m" => 60 * 1_000_000_000,
+        "h" => 60 * 60 * 1_000_000_000,
+        _ => {
+            return Err(HealthcheckError::InvalidTimeout {
+                value: raw.to_string(),
+            })
+        }
+    };
+    let nanos = number
+        .checked_mul(multiplier)
+        .filter(|nanos| *nanos > 0)
+        .ok_or_else(|| HealthcheckError::InvalidTimeout {
+            value: raw.to_string(),
+        })?;
+    Ok(Duration::from_nanos(nanos))
+}
+
 pub fn run_once(id: &str) -> Result<HealthResult> {
     let mut state = state::load_current(id)?;
     if state.status != ContainerStatus::Running {
@@ -70,6 +117,8 @@ pub fn run_once(id: &str) -> Result<HealthResult> {
         .as_ref()
         .ok_or(HealthRunError::NoHealthcheckConfigured)?;
     let args = command_args(healthcheck)?;
+    let security_profile = parse_security_profile(&state.security_profile)?;
+    let timeout = timeout_duration(healthcheck)?;
     let max_attempts = attempts(healthcheck);
 
     let mut attempts = 0;
@@ -78,17 +127,20 @@ pub fn run_once(id: &str) -> Result<HealthResult> {
         attempts += 1;
         let current_exit = exec_in_container(ExecConfig {
             target_pid: pid,
+            target_starttime: state.process_starttime,
             args: &args,
             env: &config.process.env,
             cwd: config.process.cwd.as_deref(),
+            process_user: config.process.user.as_ref(),
+            private_userns: state.userns_mode == "private",
+            security_profile,
             cgroup_path: state.cgroup_path.as_deref(),
             tty: false,
-            // The healthcheck runs unfiltered on purpose: it is the operator's
-            // own probe, not container-controlled code, and confining it would
-            // make a container look unhealthy whenever its profile is narrower
-            // than its probe.
+            // The generated profile is intentionally not installed here, but the
+            // container's base security profile is always preserved by exec.
             seccomp_program: None,
             seccomp_flags: 0,
+            timeout: Some(timeout),
         })?;
 
         let healthy = current_exit.code == Some(0) && current_exit.signal.is_none();
@@ -131,14 +183,24 @@ pub fn run_once(id: &str) -> Result<HealthResult> {
 pub fn run(
     id: &str,
     watch: bool,
-    interval: Duration,
+    interval_override: Option<Duration>,
     mut emit: impl FnMut(HealthResult) -> Result<()>,
 ) -> Result<()> {
-    if interval.is_zero() {
-        return Err(HealthRunError::InvalidInterval.into());
+    if let Some(interval) = interval_override {
+        if interval.is_zero() {
+            return Err(HealthRunError::InvalidInterval.into());
+        }
     }
 
     if watch {
+        let interval = match interval_override {
+            Some(interval) => interval,
+            None => configured_interval(id)?,
+        };
+        if interval.is_zero() {
+            return Err(HealthRunError::InvalidInterval.into());
+        }
+
         loop {
             let state = state::load_current(id)?;
             if state.status != ContainerStatus::Running {
@@ -151,6 +213,16 @@ pub fn run(
     }
 
     emit(run_once(id)?)
+}
+
+fn configured_interval(id: &str) -> Result<Duration> {
+    let state = state::load_current(id)?;
+    let config = load_config(Path::new(&state.bundle).join("config.json"))?;
+    let healthcheck = config
+        .healthcheck
+        .as_ref()
+        .ok_or(HealthRunError::NoHealthcheckConfigured)?;
+    Ok(interval_duration(healthcheck)?)
 }
 
 fn unix_timestamp() -> u64 {
@@ -233,7 +305,53 @@ mod tests {
     }
 
     #[test]
-    fn computes_healthcheck_attempts_from_retries() {
+    fn parses_healthcheck_timeouts() {
+        let healthcheck = Healthcheck {
+            test: vec!["CMD".to_string(), "true".to_string()],
+            interval: None,
+            timeout: Some("250ms".to_string()),
+            retries: None,
+        };
+        assert_eq!(
+            timeout_duration(&healthcheck).expect("timeout should parse"),
+            Duration::from_millis(250)
+        );
+
+        let invalid = Healthcheck {
+            timeout: Some("0s".to_string()),
+            ..healthcheck
+        };
+        assert!(matches!(
+            timeout_duration(&invalid),
+            Err(HealthcheckError::InvalidTimeout { .. })
+        ));
+    }
+
+    #[test]
+    fn parses_healthcheck_intervals_with_the_timeout_parser() {
+        let healthcheck = Healthcheck {
+            test: vec!["CMD".to_string(), "true".to_string()],
+            interval: Some("750ms".to_string()),
+            timeout: None,
+            retries: None,
+        };
+        assert_eq!(
+            interval_duration(&healthcheck).expect("interval should parse"),
+            Duration::from_millis(750)
+        );
+
+        let invalid = Healthcheck {
+            interval: Some("0s".to_string()),
+            ..healthcheck
+        };
+        assert!(matches!(
+            interval_duration(&invalid),
+            Err(HealthcheckError::InvalidTimeout { .. })
+        ));
+    }
+
+    #[test]
+    fn hcheck_attempts_from_retries() {
         let default_retries = Healthcheck {
             test: vec!["CMD".to_string(), "true".to_string()],
             interval: None,
@@ -253,7 +371,7 @@ mod tests {
 
     #[test]
     fn rejects_zero_health_interval_with_typed_error() {
-        let error = run("demo", false, Duration::ZERO, |_| Ok(()))
+        let error = run("demo", false, Some(Duration::ZERO), |_| Ok(()))
             .expect_err("zero interval should be rejected");
 
         assert!(matches!(

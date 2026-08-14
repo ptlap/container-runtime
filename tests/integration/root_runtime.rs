@@ -36,7 +36,7 @@ fn require_root() -> bool {
 fn root_runtime_test_lock() -> MutexGuard<'static, ()> {
     ROOT_RUNTIME_TEST_LOCK
         .lock()
-        .expect("root runtime test lock should not be poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn has_tty() -> bool {
@@ -157,13 +157,17 @@ struct RunningContainer {
 
 impl RunningContainer {
     fn start(id: String, bundle: &Path) -> Self {
+        Self::start_with_security(id, bundle, "unconfined")
+    }
+
+    fn start_with_security(id: String, bundle: &Path, security: &str) -> Self {
         let child = Command::new(crun())
             .args([
                 "run",
                 "--net",
                 "none",
                 "--security",
-                "unconfined",
+                security,
                 "--log",
                 "on",
                 id.as_str(),
@@ -512,6 +516,125 @@ fn container_env_is_not_inherited_from_host() {
 
 #[test]
 #[ignore = "requires root"]
+fn private_userns_accepts_explicit_root_credentials() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-private-userns");
+    let bundle = TestBundle::new("bundle-private-userns", &["/bin/sh", "-c", "id -u"], "")
+        .expect("bundle should be created");
+    let config_path = bundle.path.join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).expect("config should be readable"))
+            .expect("config should be JSON");
+    config["process"]["user"] = serde_json::json!({
+        "uid": 0,
+        "gid": 0,
+        "additionalGids": []
+    });
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&config).expect("config should serialize"),
+    )
+    .expect("config should be written");
+
+    let output = Command::new(crun())
+        .args([
+            "run",
+            "--net",
+            "none",
+            "--security",
+            "default",
+            "--userns",
+            "private",
+            "--log",
+            "off",
+            id.as_str(),
+        ])
+        .arg(&bundle.path)
+        .output()
+        .expect("failed to run private userns container");
+    assert_success(&output);
+}
+
+#[test]
+#[ignore = "requires root"]
+fn denylist_run_applies_base_security_profile() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-denylist-run");
+    let bundle = TestBundle::new(
+        "bundle-denylist-run",
+        &[
+            "/bin/sh",
+            "-c",
+            "grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/self/status && ! mount -t tmpfs tmpfs /tmp",
+        ],
+        "",
+    )
+    .expect("bundle should be created");
+
+    let output = run_crun(&[
+        "run",
+        "--net",
+        "none",
+        "--security",
+        "denylist",
+        "--log",
+        "on",
+        &id,
+        bundle.path.to_str().expect("bundle path should be utf8"),
+    ]);
+    assert_success(&output);
+    assert_success(&run_crun(&["delete", &id]));
+}
+
+#[test]
+#[ignore = "requires root"]
+fn exec_preserves_uid_capability_drop_and_default_seccomp() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-exec-security");
+    let bundle = TestBundle::new("bundle-exec-security", &["/bin/sh", "-c", "sleep 60"], "")
+        .expect("bundle should be created");
+    let config_path = bundle.path.join("config.json");
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).expect("config should be readable"))
+            .expect("config should be JSON");
+    config["process"]["user"] = serde_json::json!({"uid": 1000, "gid": 1000});
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&config).expect("config should serialize"),
+    )
+    .expect("config should be written");
+
+    let _running = RunningContainer::start_with_security(id.clone(), &bundle.path, "default");
+    let exec = run_crun(&[
+        "exec",
+        &id,
+        "/bin/sh",
+        "-c",
+        "test \"$(id -u)\" = 1000 && grep -Eq '^CapEff:\\s+0+$' /proc/self/status && ! mount -t tmpfs tmpfs /tmp",
+    ]);
+    assert_success(&exec);
+    assert!(
+        String::from_utf8_lossy(&exec.stdout).contains("exec process exited with code: 0"),
+        "exec should complete successfully: stdout={} stderr={}",
+        String::from_utf8_lossy(&exec.stdout),
+        String::from_utf8_lossy(&exec.stderr)
+    );
+}
+
+#[test]
+#[ignore = "requires root"]
 fn run_state_delete_smoke() {
     if !require_root() {
         return;
@@ -537,6 +660,34 @@ fn run_state_delete_smoke() {
     let state = json_stdout(&state);
     assert_eq!(state["status"], "stopped");
     assert_success(&run_crun(&["delete", &id]));
+}
+
+#[test]
+#[ignore = "requires root"]
+fn healthcheck_keeps_base_denylist_security() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-health-denylist");
+    let bundle = TestBundle::new(
+        "bundle-health-denylist",
+        &["/bin/sh", "-c", "sleep 60"],
+        r#""healthcheck": {
+    "test": ["CMD", "/bin/sh", "-c", "grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/self/status && ! mount -t tmpfs tmpfs /tmp"],
+    "timeout": "2s",
+    "retries": 0
+  }"#,
+    )
+    .expect("bundle should be created");
+    let _running = RunningContainer::start_with_security(id.clone(), &bundle.path, "denylist");
+
+    let health = run_crun(&["health", &id, "--json"]);
+    assert_success(&health);
+    let health = json_stdout(&health);
+    assert_eq!(health["status"], "healthy");
+    assert_eq!(health["attempts"], 1);
 }
 
 #[test]
@@ -631,6 +782,59 @@ fn bind_mount_readonly_works() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("mounted-ok"));
     assert_success(&run_crun(&["delete", &id]));
     let _ = fs::remove_dir_all(shared);
+}
+
+#[test]
+#[ignore = "requires root"]
+fn bind_mount_destination_symlink_cannot_escape_rootfs() {
+    if !require_root() {
+        return;
+    }
+    let _guard = root_runtime_test_lock();
+
+    let id = unique_name("root-mount-symlink");
+    let sentinel = std::env::temp_dir().join(unique_name("mount-sentinel"));
+    fs::write(&sentinel, "must-remain-untouched\n").expect("sentinel should be written");
+    let source = sentinel.to_str().expect("sentinel path should be utf8");
+    let extra = format!(
+        r#""mounts": [{{
+    "destination": "/etc/escape",
+    "source": {},
+    "type": "bind",
+    "options": ["bind"]
+  }}]"#,
+        serde_json::to_string(source).expect("sentinel path should serialize")
+    );
+    let bundle = TestBundle::new("bundle-mount-symlink", &["/bin/true"], &extra)
+        .expect("bundle should be created");
+
+    let rootfs = bundle.path.join("rootfs");
+    fs::remove_file(&rootfs).expect("test rootfs symlink should be removed");
+    fs::create_dir_all(rootfs.join("etc")).expect("test rootfs should be created");
+    symlink(&sentinel, rootfs.join("etc/escape")).expect("destination symlink should be created");
+
+    let output = run_crun(&[
+        "run",
+        "--net",
+        "none",
+        "--security",
+        "unconfined",
+        &id,
+        bundle.path.to_str().expect("bundle path should be utf8"),
+    ]);
+    assert!(
+        !output.status.success(),
+        "a symlinked mount destination must be rejected\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&sentinel).expect("sentinel should remain readable"),
+        "must-remain-untouched\n"
+    );
+
+    let _ = run_crun(&["delete", &id]);
+    let _ = fs::remove_file(sentinel);
 }
 
 #[test]

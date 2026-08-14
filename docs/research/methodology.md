@@ -20,7 +20,7 @@ Four profiles are compared:
 | Symbol | Profile | `|A_P|` on x86_64 |
 |---|---|---|
 | `A_none` | No filter | 363 |
-| `A_crun` | `--security default`, the runtime's 16-syscall denylist | 347 |
+| `A_crun` | `--security denylist`, the runtime's 16-syscall denylist | 347 |
 | `A_docker` | Docker's default profile, default capabilities | **296** |
 | `A_gen(w)` | Generated for workload `w` | measured |
 
@@ -101,7 +101,7 @@ ratio to the unconfined run. It is expected to be large: every syscall stops the
 tracee twice through the scheduler.
 
 **Enforce** is the steady-state cost. Reported as the median difference in
-`time_to_ready_ms` against `--security unconfined` and `--security default`.
+`time_to_ready_ms` against `--security unconfined` and `--security denylist`.
 
 The startup metric in `scripts/benchmark.sh` cannot be used for this. It stops
 when the runtime records the container as running, and that happens in the

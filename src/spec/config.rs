@@ -253,6 +253,17 @@ impl OciConfig {
             return Err(OciConfigError::EmptyProcessArgs);
         }
 
+        if self
+            .process
+            .capabilities
+            .as_ref()
+            .is_some_and(|capabilities| !capabilities.is_empty())
+        {
+            return Err(OciConfigError::UnsupportedCapabilities);
+        }
+
+        validate_environment(&self.process.env)?;
+
         if self.root.path.trim().is_empty() {
             return Err(OciConfigError::EmptyRootPath);
         }
@@ -315,6 +326,17 @@ impl OciConfig {
         }
 
         if let Some(linux) = &self.linux {
+            for namespace in &linux.namespaces {
+                if !matches!(
+                    namespace.namespace_type.as_str(),
+                    "pid" | "mount" | "uts" | "ipc" | "network" | "user"
+                ) {
+                    return Err(OciConfigError::UnsupportedNamespace {
+                        namespace_type: namespace.namespace_type.clone(),
+                    });
+                }
+            }
+
             for path in linux.masked_paths.iter().chain(linux.readonly_paths.iter()) {
                 validate_container_path(path)?;
             }
@@ -324,19 +346,32 @@ impl OciConfig {
     }
 
     pub fn validation_warnings(&self) -> Vec<String> {
-        let mut warnings = Vec::new();
-        if self
-            .process
-            .capabilities
-            .as_ref()
-            .is_some_and(|capabilities| !capabilities.is_empty())
-        {
-            warnings.push(
-                "process.capabilities is parsed, but this runtime only enforces full capability drop through --security default".to_string(),
-            );
-        }
-        warnings
+        Vec::new()
     }
+}
+
+pub fn validate_environment(env: &[String]) -> std::result::Result<(), OciConfigError> {
+    let mut keys = std::collections::BTreeSet::new();
+    for (index, item) in env.iter().enumerate() {
+        if item.contains('\0') {
+            return Err(OciConfigError::EnvironmentContainsNul { index });
+        }
+        let Some((key, _value)) = item.split_once('=') else {
+            return Err(OciConfigError::InvalidEnvironmentEntry { index });
+        };
+        if key.is_empty() {
+            return Err(OciConfigError::EmptyEnvironmentKey { index });
+        }
+        if key.contains('=') || key.contains('\0') {
+            return Err(OciConfigError::InvalidEnvironmentEntry { index });
+        }
+        if !keys.insert(key.to_string()) {
+            return Err(OciConfigError::DuplicateEnvironmentKey {
+                key: key.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn rlimit_resource(name: &str) -> Option<libc::__rlimit_resource_t> {
@@ -518,12 +553,7 @@ mod tests {
         fs::write(
             bundle.join("config.json"),
             r#"{
-                "process": {
-                    "args": ["/bin/sh"],
-                    "capabilities": {
-                        "effective": ["CAP_NET_ADMIN"]
-                    }
-                },
+                "process": { "args": ["/bin/sh"] },
                 "root": { "path": "rootfs" }
             }"#,
         )
@@ -533,8 +563,7 @@ mod tests {
 
         assert!(report.valid);
         assert_eq!(report.bundle, bundle.display().to_string());
-        assert_eq!(report.warnings.len(), 1);
-        assert!(report.warnings[0].contains("process.capabilities"));
+        assert!(report.warnings.is_empty());
 
         fs::remove_dir_all(bundle).expect("cleanup test dir");
     }
@@ -627,7 +656,7 @@ mod tests {
 
     #[test]
     fn parses_oci_user_capabilities_rlimits_and_paths() {
-        let config = parse_config(
+        let config: OciConfig = serde_json::from_str(
             r#"{
                 "process": {
                     "args": ["/bin/sh"],
@@ -655,7 +684,10 @@ mod tests {
             }"#,
         )
         .expect("OCI compatibility fields should parse");
-
+        assert!(matches!(
+            config.validate(),
+            Err(OciConfigError::UnsupportedCapabilities)
+        ));
         let user = config.process.user.as_ref().expect("user should parse");
         assert_eq!(user.uid, 1000);
         assert_eq!(user.gid, 1000);
@@ -680,7 +712,23 @@ mod tests {
                 .masked_paths,
             ["/proc/kcore"]
         );
-        assert_eq!(config.validation_warnings().len(), 1);
+        assert!(config.validation_warnings().is_empty());
+    }
+
+    #[test]
+    fn rejects_unsupported_namespace_types() {
+        let error = parse_config(
+            r#"{
+                "process": { "args": ["/bin/sh"] },
+                "root": { "path": "rootfs" },
+                "linux": { "namespaces": [{"type": "time"}] }
+            }"#,
+        )
+        .expect_err("unsupported namespace should be rejected");
+        assert!(matches!(
+            error,
+            OciConfigError::UnsupportedNamespace { namespace_type } if namespace_type == "time"
+        ));
     }
 
     #[test]
@@ -730,6 +778,27 @@ mod tests {
         assert!(matches!(
             error,
             OciConfigError::UnsupportedCrunProfile { profile } if profile == "fast-but-unsafe"
+        ));
+    }
+
+    #[test]
+    fn validates_environment_entries_before_runtime_setup() {
+        assert!(validate_environment(&["PATH=/bin".to_string(), "EMPTY=".to_string()]).is_ok());
+        assert!(matches!(
+            validate_environment(&["BROKEN".to_string()]),
+            Err(OciConfigError::InvalidEnvironmentEntry { index: 0 })
+        ));
+        assert!(matches!(
+            validate_environment(&["=value".to_string()]),
+            Err(OciConfigError::EmptyEnvironmentKey { index: 0 })
+        ));
+        assert!(matches!(
+            validate_environment(&["A=one".to_string(), "A=two".to_string()]),
+            Err(OciConfigError::DuplicateEnvironmentKey { key }) if key == "A"
+        ));
+        assert!(matches!(
+            validate_environment(&["A=bad\0value".to_string()]),
+            Err(OciConfigError::EnvironmentContainsNul { index: 0 })
         ));
     }
 

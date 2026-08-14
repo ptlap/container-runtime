@@ -3,10 +3,13 @@ use super::log_helper::{redirect_stdio_to_log, start_log_helper, wait_for_log_he
 use super::pty;
 use crate::cgroup::Cgroup;
 use crate::error::ContainerError;
-use crate::filesystem::{apply_oci_linux_paths, setup_overlay_rootfs, setup_rootfs, OverlayConfig};
+use crate::filesystem::{
+    apply_oci_linux_paths, setup_overlay_rootfs, setup_rootfs, OverlayConfig, OverlayOwnership,
+};
 use crate::network::{
-    allocate_bridge_network, cleanup_nat, cleanup_veth_host, release_bridge_network,
-    setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NetworkMode,
+    allocate_bridge_network, cleanup_nat_lease, cleanup_veth_host, release_bridge_network,
+    setup_loopback, setup_nat, setup_veth_child, setup_veth_parent, BridgeNetwork, NatLease,
+    NetworkMode,
 };
 use crate::seccomp::collector::{self, CollectorOptions};
 use crate::seccomp::{Program, SeccompMode, SeccompPlan};
@@ -18,6 +21,7 @@ use nix::fcntl::OFlag;
 use nix::libc;
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
+use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{chdir, close, execvp, fork, pipe2, read, setsid, write, ForkResult};
 use std::ffi::CString;
@@ -231,7 +235,7 @@ impl<'a> ChildConfigBuilder<'a> {
             masked_paths: self.masked_paths.unwrap_or(&[]),
             readonly_paths: self.readonly_paths.unwrap_or(&[]),
             network_mode: self.network_mode.unwrap_or(NetworkMode::None),
-            security_profile: self.security_profile.unwrap_or(SecurityProfile::Default),
+            security_profile: self.security_profile.unwrap_or(SecurityProfile::Denylist),
             userns_mode: self.userns_mode.unwrap_or(UserNamespaceMode::Host),
             child_flags: self.child_flags,
             is_rootless: self.is_rootless,
@@ -246,40 +250,69 @@ struct ParentResources {
     container_id: String,
     cgroup: Option<Cgroup>,
     bridge_network: Option<BridgeNetwork>,
+    nat_lease: Option<NatLease>,
+    overlay_ownership: Option<OverlayOwnership>,
     release_bridge_allocation: bool,
 }
 
 impl ParentResources {
-    fn new(container_id: &str) -> Self {
+    fn new(container_id: &str, overlay_ownership: Option<OverlayOwnership>) -> Self {
         Self {
             container_id: container_id.to_string(),
             cgroup: None,
             bridge_network: None,
+            nat_lease: None,
+            overlay_ownership,
             release_bridge_allocation: false,
         }
     }
 
     fn cleanup(&mut self) -> Result<()> {
+        let mut first_error: Option<anyhow::Error> = None;
         if let Some(network) = self.bridge_network.take() {
-            cleanup_nat(&network.subnet)
-                .with_context(|| format!("failed to cleanup NAT for {}", network.subnet))?;
+            if let Some(lease) = self.nat_lease.take() {
+                if let Err(error) = cleanup_nat_lease(&lease)
+                    .with_context(|| format!("failed to cleanup NAT for {}", network.subnet))
+                {
+                    first_error.get_or_insert(error);
+                }
+            }
             if let Err(error) = cleanup_veth_host(&network.veth.host_name) {
                 warn!("failed to cleanup veth {}: {error}", network.veth.host_name);
+                first_error.get_or_insert(error);
             }
         }
 
         if self.release_bridge_allocation {
-            release_bridge_network(&self.container_id).with_context(|| {
+            if let Err(error) = release_bridge_network(&self.container_id).with_context(|| {
                 format!("failed to release bridge subnet for {}", self.container_id)
-            })?;
+            }) {
+                first_error.get_or_insert(error);
+            }
             self.release_bridge_allocation = false;
         }
 
-        if let Some(cgroup) = self.cgroup.take() {
-            cgroup.delete()?;
+        if let Some(overlay) = self.overlay_ownership.take() {
+            if let Err(error) = overlay.cleanup().with_context(|| {
+                format!(
+                    "failed to cleanup overlay artifacts for {}",
+                    self.container_id
+                )
+            }) {
+                first_error.get_or_insert(error);
+            }
         }
 
-        Ok(())
+        if let Some(cgroup) = self.cgroup.take() {
+            if let Err(error) = cgroup.delete() {
+                first_error.get_or_insert(error);
+            }
+        }
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn cleanup_with_warnings(&mut self) {
@@ -377,6 +410,11 @@ pub fn run_process(
         );
     }
 
+    let overlay_ownership = config
+        .overlay_config
+        .as_ref()
+        .map(OverlayOwnership::from_config);
+
     let process_exit = match unsafe { fork() }.context("failed to fork process")? {
         ForkResult::Child => {
             close(write_fd).ok();
@@ -462,16 +500,28 @@ pub fn run_process(
                 pty.close_slave();
             }
             let child_pid = child.as_raw();
-            let mut resources = ParentResources::new(config.id);
+            let mut resources = ParentResources::new(config.id, overlay_ownership.clone());
 
             if let Some(cgroup_config) = config.cgroup_config {
-                let cgroup = Cgroup::new(&format!("crun-{child_pid}"), &cgroup_config)?;
+                let cgroup = match Cgroup::new(&format!("crun-{child_pid}"), &cgroup_config) {
+                    Ok(cgroup) => cgroup,
+                    Err(error) => {
+                        let _ = kill(child, Signal::SIGKILL);
+                        let _ = waitpid(child, None);
+                        return Err(error);
+                    }
+                };
                 resources.cgroup = Some(cgroup);
-                resources
+                if let Err(error) = resources
                     .cgroup
                     .as_ref()
                     .expect("cgroup was just created")
-                    .add_process(child)?;
+                    .add_process(child)
+                {
+                    let _ = kill(child, Signal::SIGKILL);
+                    let _ = waitpid(child, None);
+                    return Err(error).context("failed to attach container process to cgroup");
+                }
             }
 
             if network_mode == NetworkMode::Bridge {
@@ -483,7 +533,7 @@ pub fn run_process(
                     .as_ref()
                     .expect("bridge network was just created");
                 setup_veth_parent(child, network)?;
-                setup_nat(&network.subnet)?;
+                resources.nat_lease = Some(setup_nat(&network.subnet)?);
             }
 
             on_started(StartedProcess {
@@ -496,6 +546,8 @@ pub fn run_process(
                     .bridge_network
                     .as_ref()
                     .map(|network| network.subnet.clone()),
+                nat_lease: resources.nat_lease.clone(),
+                overlay_ownership: resources.overlay_ownership.clone(),
             })?;
 
             let signal = resources
@@ -728,7 +780,7 @@ fn run_child(
     close(userns_mapped_read_fd).ok();
 
     apply_rlimits(config.rlimits)?;
-    apply_process_user(config.process_user)?;
+    apply_process_user(config.process_user, config.userns_mode.is_private())?;
 
     security::apply(config.security_profile, config.seccomp_plan())?;
 
@@ -792,7 +844,7 @@ fn apply_rlimits(rlimits: &[LinuxRlimit]) -> Result<()> {
     Ok(())
 }
 
-fn apply_process_user(user: Option<&ProcessUser>) -> Result<()> {
+pub(crate) fn apply_process_user(user: Option<&ProcessUser>, private_userns: bool) -> Result<()> {
     let Some(user) = user else {
         return Ok(());
     };
@@ -802,14 +854,16 @@ fn apply_process_user(user: Option<&ProcessUser>) -> Result<()> {
         .iter()
         .map(|gid| *gid as libc::gid_t)
         .collect::<Vec<_>>();
-    let groups_ptr = if groups.is_empty() {
-        std::ptr::null()
-    } else {
-        groups.as_ptr()
-    };
-    let setgroups_result = unsafe { libc::setgroups(groups.len(), groups_ptr) };
-    if setgroups_result < 0 {
-        return Err(std::io::Error::last_os_error()).context("failed to set additional groups");
+    if !private_userns || !groups.is_empty() {
+        let groups_ptr = if groups.is_empty() {
+            std::ptr::null()
+        } else {
+            groups.as_ptr()
+        };
+        let setgroups_result = unsafe { libc::setgroups(groups.len(), groups_ptr) };
+        if setgroups_result < 0 {
+            return Err(std::io::Error::last_os_error()).context("failed to set additional groups");
+        }
     }
 
     let setgid_result = unsafe { libc::setgid(user.gid as libc::gid_t) };

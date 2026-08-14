@@ -49,6 +49,21 @@ pub enum ContainerError {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
+pub enum ProcessIdentityError {
+    #[error("process {pid} identity token is missing")]
+    MissingToken { pid: i32 },
+
+    #[error("process {pid} identity no longer matches the recorded process")]
+    Reused { pid: i32 },
+
+    #[error("failed to open pidfd for process {pid}: {errno}")]
+    PidfdOpen { pid: i32, errno: String },
+
+    #[error("failed to signal process {pid} through pidfd: {errno}")]
+    PidfdSignal { pid: i32, errno: String },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum LifecycleError {
     #[error("container id already exists: {id}")]
     ContainerAlreadyExists { id: String },
@@ -65,6 +80,9 @@ pub enum LifecycleError {
     #[error("container {id} has no pid")]
     ContainerHasNoPid { id: String },
 
+    #[error("container {id} has no process identity token")]
+    ContainerHasNoProcessIdentity { id: String },
+
     #[error("container {id} did not stop after SIGKILL")]
     StopDidNotComplete { id: String },
 }
@@ -73,6 +91,21 @@ pub enum LifecycleError {
 pub enum OciConfigError {
     #[error("process.args must not be empty")]
     EmptyProcessArgs,
+
+    #[error("process.env entry at index {index} must use KEY=VALUE syntax")]
+    InvalidEnvironmentEntry { index: usize },
+
+    #[error("process.env entry at index {index} has an empty key")]
+    EmptyEnvironmentKey { index: usize },
+
+    #[error("process.env entry at index {index} contains NUL")]
+    EnvironmentContainsNul { index: usize },
+
+    #[error("process.env contains duplicate key: {key}")]
+    DuplicateEnvironmentKey { key: String },
+
+    #[error("process.capabilities is not supported")]
+    UnsupportedCapabilities,
 
     #[error("root.path must not be empty")]
     EmptyRootPath,
@@ -106,6 +139,9 @@ pub enum OciConfigError {
 
     #[error("linux masked/readonly path must not escape root: {path}")]
     LinuxPathEscapesRoot { path: String },
+
+    #[error("unsupported Linux namespace type: {namespace_type}")]
+    UnsupportedNamespace { namespace_type: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -116,6 +152,12 @@ pub enum CgroupError {
     #[error("pids_limit must be greater than zero, got {value}")]
     InvalidPidsLimit { value: i64 },
 
+    #[error("cpu_quota must be greater than zero, got {value}")]
+    InvalidCpuQuota { value: i64 },
+
+    #[error("cpu_period must be greater than zero, got {value}")]
+    InvalidCpuPeriod { value: u64 },
+
     #[error("container {id} is not running")]
     ContainerNotRunning { id: String },
 
@@ -124,6 +166,12 @@ pub enum CgroupError {
 
     #[error("cgroup path does not exist: {path}")]
     PathDoesNotExist { path: String },
+
+    #[error("cgroup v2 is not mounted on this host")]
+    CgroupV2Unavailable,
+
+    #[error("required cgroup controller is unavailable: {controller}")]
+    ControllerUnavailable { controller: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -136,6 +184,9 @@ pub enum HealthcheckError {
 
     #[error("healthcheck {kind} must include a command")]
     MissingCommand { kind: &'static str },
+
+    #[error("healthcheck timeout is invalid: {value}")]
+    InvalidTimeout { value: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -184,6 +235,13 @@ pub enum NetworkError {
 
     #[error("{program} command failed: {args}")]
     CommandFailed { program: &'static str, args: String },
+
+    #[error("{program} command timed out after {timeout_ms}ms: {args}")]
+    CommandTimedOut {
+        program: &'static str,
+        args: String,
+        timeout_ms: u128,
+    },
 
     #[error("timed out waiting for network allocation lock")]
     LockTimeout,
@@ -235,6 +293,9 @@ pub enum FilesystemError {
 
     #[error("overlay upperdir does not exist: {path}")]
     OverlayUpperdirDoesNotExist { path: String },
+
+    #[error("overlay mergeddir already exists and is not owned by this start: {path}")]
+    OverlayMergeddirAlreadyExists { path: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -280,6 +341,9 @@ pub enum SeccompError {
 
     #[error("invalid syscall order: {value}")]
     InvalidOrder { value: String },
+
+    #[error("unsupported conditional seccomp rule for syscall(s): {syscalls}")]
+    UnsupportedConditionalRule { syscalls: String },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -313,10 +377,43 @@ pub enum ImageError {
 
     #[error("tar extraction failed: {stderr}")]
     TarExtractionFailed { stderr: String },
+
+    #[error("tar extraction timed out after {timeout_ms}ms")]
+    TarCommandTimedOut { timeout_ms: u128 },
+
+    #[error("archive path escapes rootfs: {path}")]
+    ArchivePathEscapesRootfs { path: String },
+
+    #[error("archive link target is missing: {path}")]
+    ArchiveLinkTargetMissing { path: String },
+
+    #[error("unsupported archive entry type at {path}: {kind}")]
+    UnsupportedArchiveEntry { path: String, kind: &'static str },
+
+    #[error("archive contains too many entries; limit is {limit}")]
+    ArchiveTooManyEntries { limit: u64 },
+
+    #[error("archive expands beyond the {limit} byte limit")]
+    ArchiveTooLarge { limit: u64 },
+
+    #[error("archive file {path} is {size} bytes; limit is {limit}")]
+    ArchiveFileTooLarge { path: String, size: u64, limit: u64 },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum AuditLogError {
+    #[error("audit log record is {size} bytes; limit is {limit}")]
+    RecordTooLarge { size: usize, limit: usize },
+
+    #[error("audit log history is {size} bytes; limit is {limit}")]
+    HistoryTooLarge { size: usize, limit: usize },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CheckpointError {
+    #[error("container {id} has a conflicting running runtime state")]
+    StateConflict { id: String },
+
     #[error("container {id} is not running")]
     ContainerNotRunning { id: String },
 
@@ -337,6 +434,15 @@ pub enum CheckpointError {
 
     #[error("CRIU command {command} failed: {stderr}")]
     CriuCommandFailed { command: String, stderr: String },
+
+    #[error("CRIU command timed out after {timeout_ms}ms: {command}")]
+    CriuCommandTimedOut { command: String, timeout_ms: u128 },
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum DoctorError {
+    #[error("doctor ip command timed out after {timeout_ms}ms: {command}")]
+    CommandTimedOut { command: String, timeout_ms: u128 },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

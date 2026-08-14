@@ -127,11 +127,12 @@ pub fn run(options: CollectorOptions) -> Result<CollectorOutcome> {
                     continue;
                 }
 
-                if tracees.insert(pid) && signal == Signal::SIGSTOP {
+                if signal == Signal::SIGSTOP && tracees.insert(pid) {
                     // A newly auto-attached child. Its attach stop can arrive
                     // before the parent's fork event, so an unknown pid in
-                    // SIGSTOP is treated as an attach either way, and the
-                    // signal is not delivered on.
+                    // SIGSTOP is treated as an attach either way. Count it here
+                    // because the later fork event may see it already tracked.
+                    capture.processes_seen += 1;
                     resume(pid, None);
                     continue;
                 }
@@ -168,7 +169,17 @@ fn handle_event(
 ) -> Result<()> {
     if event == ptrace::Event::PTRACE_EVENT_SECCOMP as i32 {
         match syscall_number(pid) {
-            Ok(number) => capture.record(number, elapsed_ms),
+            Ok(number) => {
+                capture.record(number, elapsed_ms);
+                if process_creation_syscall(number) {
+                    // Some kernels expose fork/clone through the seccomp stop
+                    // but do not deliver a separate ptrace event to this
+                    // tracer. Count the created process conservatively here;
+                    // PTRACE_EVENT_* still adds the child to `tracees` when it
+                    // is available.
+                    capture.processes_seen += 1;
+                }
+            }
             // The tracee can die between the stop and the register read.
             Err(Errno::ESRCH) => {}
             Err(error) => return Err(error).context("failed to read the trapped syscall number"),
@@ -194,6 +205,13 @@ fn handle_event(
     }
 
     Ok(())
+}
+
+fn process_creation_syscall(number: i64) -> bool {
+    matches!(
+        super::syscalls::name(number),
+        Some("fork" | "vfork" | "clone" | "clone3")
+    )
 }
 
 fn set_trace_options(pid: Pid) -> Result<()> {
@@ -306,6 +324,16 @@ mod tests {
             false
         )));
         assert!(!is_terminal(&WaitStatus::Stopped(pid, Signal::SIGSTOP)));
+    }
+
+    #[test]
+    fn recognizes_process_creation_syscalls() {
+        assert!(process_creation_syscall(
+            super::super::syscalls::number("fork").expect("fork exists")
+        ));
+        assert!(!process_creation_syscall(
+            super::super::syscalls::number("read").expect("read exists")
+        ));
     }
 
     #[test]

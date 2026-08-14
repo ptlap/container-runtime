@@ -32,7 +32,7 @@ pub fn parse_network_mode(value: &str) -> Result<NetworkMode, ModeError> {
 
 pub fn parse_security_profile(value: &str) -> Result<SecurityProfile, ModeError> {
     match value {
-        "default" => Ok(SecurityProfile::Default),
+        "denylist" | "default" => Ok(SecurityProfile::Denylist),
         "unconfined" => Ok(SecurityProfile::Unconfined),
         _ => Err(ModeError::InvalidSecurityProfile {
             value: value.to_string(),
@@ -61,8 +61,12 @@ mod tests {
         assert_eq!(parse_network_mode("none").unwrap(), NetworkMode::None);
         assert_eq!(parse_network_mode("bridge").unwrap(), NetworkMode::Bridge);
         assert_eq!(
+            parse_security_profile("denylist").unwrap(),
+            SecurityProfile::Denylist
+        );
+        assert_eq!(
             parse_security_profile("default").unwrap(),
-            SecurityProfile::Default
+            SecurityProfile::Denylist
         );
         assert_eq!(
             parse_security_profile("unconfined").unwrap(),

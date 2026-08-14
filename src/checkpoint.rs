@@ -1,3 +1,4 @@
+use crate::command::{self, CommandError, EXTERNAL_COMMAND_TIMEOUT};
 use crate::error::CheckpointError;
 use crate::spec::config::load_config;
 use crate::state::{self, ContainerStatus, DEFAULT_STATE_ROOT};
@@ -48,6 +49,7 @@ pub struct RestoreReport {
 
 pub fn checkpoint(id: &str, options: CheckpointOptions) -> Result<CheckpointReport> {
     let container_state = state::load_current(id)?;
+    reject_running_state(id, &container_state.status)?;
     if container_state.status != ContainerStatus::Running {
         return Err(CheckpointError::ContainerNotRunning { id: id.to_string() }.into());
     }
@@ -94,6 +96,9 @@ pub fn checkpoint(id: &str, options: CheckpointOptions) -> Result<CheckpointRepo
 pub fn restore(id: &str, options: RestoreOptions) -> Result<RestoreReport> {
     validate_checkpoint_id(id)?;
     let container_state = state::load_current(id).ok();
+    if let Some(state) = &container_state {
+        reject_running_state(id, &state.status)?;
+    }
     let criu = detect_criu();
     ensure_criu_available(&criu)?;
 
@@ -123,12 +128,11 @@ pub fn restore(id: &str, options: RestoreOptions) -> Result<RestoreReport> {
 }
 
 pub fn detect_criu() -> CriuStatus {
-    match Command::new("criu")
-        .arg("--version")
+    let mut criu = Command::new("criu");
+    criu.arg("--version")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-    {
+        .stderr(Stdio::piped());
+    match command::output(criu, "criu --version", EXTERNAL_COMMAND_TIMEOUT) {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             CriuStatus {
@@ -175,12 +179,23 @@ fn run_criu(command: &[String]) -> Result<()> {
     let Some((program, args)) = command.split_first() else {
         return Err(CheckpointError::EmptyCriuCommand.into());
     };
-    let output = Command::new(program)
-        .args(args)
+    let mut criu = Command::new(program);
+    criu.args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .with_context(|| format!("failed to execute {}", command.join(" ")))?;
+        .stderr(Stdio::piped());
+    let description = command.join(" ");
+    let output =
+        command::output(criu, description.clone(), EXTERNAL_COMMAND_TIMEOUT).map_err(|error| {
+            match error {
+                CommandError::TimedOut { timeout_ms, .. } => {
+                    anyhow::Error::new(CheckpointError::CriuCommandTimedOut {
+                        command: description.clone(),
+                        timeout_ms,
+                    })
+                }
+                error => anyhow::Error::new(error),
+            }
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -260,6 +275,16 @@ fn validate_checkpoint_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+fn reject_running_state(
+    id: &str,
+    status: &ContainerStatus,
+) -> std::result::Result<(), CheckpointError> {
+    if *status == ContainerStatus::Running {
+        return Err(CheckpointError::StateConflict { id: id.to_string() });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +343,20 @@ mod tests {
         ));
 
         assert!(validate_checkpoint_id("demo_01.2-3").is_ok());
+    }
+
+    #[test]
+    fn rejects_running_state_for_checkpoint_and_restore_conflicts() {
+        let error = reject_running_state("demo", &ContainerStatus::Running)
+            .expect_err("running state should conflict");
+        assert_eq!(
+            error,
+            CheckpointError::StateConflict {
+                id: "demo".to_string()
+            }
+        );
+        assert!(reject_running_state("demo", &ContainerStatus::Stopped).is_ok());
+        assert!(reject_running_state("demo", &ContainerStatus::Created).is_ok());
     }
 
     #[test]

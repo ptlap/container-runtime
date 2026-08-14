@@ -22,7 +22,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Khởi chạy container**:
    ```bash
-   sudo target/release/crun run -t --net bridge --security default test-interactive examples/bundle
+   sudo target/release/crun run -t --net bridge --security denylist test-interactive examples/bundle
    ```
 2. **Kiểm tra card mạng (bên trong container)**:
    ```sh
@@ -52,7 +52,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 *   **Chế độ None (Cách ly mạng hoàn toàn)**:
     1. Khởi chạy:
        ```bash
-       sudo target/release/crun run -t --net none --security default test-net-none examples/bundle
+       sudo target/release/crun run -t --net none --security denylist test-net-none examples/bundle
        ```
     2. Kiểm tra mạng bên trong container:
        ```sh
@@ -67,7 +67,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 *   **Chế độ Host (Dùng chung mạng máy chủ)**:
     1. Khởi chạy:
        ```bash
-       sudo target/release/crun run -t --net host --security default test-net-host examples/bundle
+       sudo target/release/crun run -t --net host --security denylist test-net-host examples/bundle
        ```
     2. Kiểm tra mạng bên trong container:
        ```sh
@@ -82,12 +82,12 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 ---
 
 ### Kịch Bản 3: Kiểm Thử Cấu Hình Bảo Mật (Security Profiles)
-*Kiểm chứng: Sự khác biệt giữa cấu hình bảo mật `default` (chặn qua seccomp) và `unconfined` (cho phép syscall).*
+*Kiểm chứng: Sự khác biệt giữa cấu hình bảo mật `denylist` (chặn qua seccomp) và `unconfined` (cho phép syscall).*
 
-*   **Chế độ Default (Có seccomp chặn syscall)**:
+*   **Chế độ Denylist (Có seccomp chặn syscall)**:
     1. Khởi chạy:
        ```bash
-       sudo target/release/crun run -t --net none --security default test-sec-def examples/bundle
+       sudo target/release/crun run -t --net none --security denylist test-sec-def examples/bundle
        ```
     2. Thử thực hiện lệnh `mount` bên trong container:
        ```sh
@@ -122,7 +122,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Khởi chạy container**:
    ```bash
-   sudo target/release/crun run -t --net none --security default test-pid-limit examples/bundle
+   sudo target/release/crun run -t --net none --security denylist test-pid-limit examples/bundle
    ```
 2. **Kiểm tra giới hạn tối đa số PIDs (bên trong container)**:
    ```sh
@@ -147,7 +147,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Tạo container ở trạng thái chờ (`created`)**:
    ```bash
-   sudo target/release/crun create --net none --security default test-detached examples/bundle
+   sudo target/release/crun create --net none --security denylist test-detached examples/bundle
    ```
 2. **Kiểm tra trạng thái**:
    ```bash
@@ -184,13 +184,13 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Tạo container**:
    ```bash
-   sudo target/release/crun create --net none --security default test-inspect examples/bundle
+   sudo target/release/crun create --net none --security denylist test-inspect examples/bundle
    ```
 2. **Kiểm tra cấu hình an ninh**:
    ```bash
    sudo target/release/crun inspect-security test-inspect
    ```
-   *Yêu cầu*: Báo cáo hiển thị rõ ràng thông số: `NoNewPrivs: true`, `Seccomp: default`, các `Capabilities` bị drop, các thông số Cgroup Limits.
+   *Yêu cầu*: Báo cáo hiển thị rõ ràng thông số: `NoNewPrivs: true`, `Seccomp: denylist`, các `Capabilities` bị drop, các thông số Cgroup Limits.
 3. **Dọn dẹp**:
    ```bash
    sudo target/release/crun delete test-inspect
@@ -203,7 +203,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Tạo và khởi chạy container ngầm**:
    ```bash
-   sudo target/release/crun create --net none --security default test-diff examples/bundle
+   sudo target/release/crun create --net none --security denylist test-diff examples/bundle
    sudo target/release/crun start test-diff
    ```
 2. **Tạo, sửa đổi và xóa tập tin bên trong container**:
@@ -232,7 +232,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Khởi chạy container ngầm chạy một vòng lặp**:
    ```bash
-   sudo target/release/crun create --net none --security default test-trace examples/bundle
+   sudo target/release/crun create --net none --security denylist test-trace examples/bundle
    sudo target/release/crun start test-trace
    ```
 2. **Theo dõi thông tin tiến trình**:
@@ -314,7 +314,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Khởi chạy container**:
    ```bash
-   sudo target/release/crun create --net none --security default test-health examples/bundle
+   sudo target/release/crun create --net none --security denylist test-health examples/bundle
    sudo target/release/crun start test-health
    ```
 2. **Theo dõi sức khỏe thời gian thực (Watch)**:

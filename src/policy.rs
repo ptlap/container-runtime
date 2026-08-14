@@ -45,8 +45,8 @@ pub fn apply_security(
     policy_profile: PolicyProfile,
 ) -> SecurityProfile {
     match policy_profile {
-        PolicyProfile::Restricted => SecurityProfile::Default,
-        PolicyProfile::Debug if security_profile == SecurityProfile::Default => {
+        PolicyProfile::Restricted => SecurityProfile::Denylist,
+        PolicyProfile::Debug if security_profile == SecurityProfile::Denylist => {
             SecurityProfile::Unconfined
         }
         _ => security_profile,
@@ -156,10 +156,10 @@ mod tests {
     fn applies_policy_security_and_log_defaults() {
         assert_eq!(
             apply_security(SecurityProfile::Unconfined, PolicyProfile::Restricted),
-            SecurityProfile::Default
+            SecurityProfile::Denylist
         );
         assert_eq!(
-            apply_security(SecurityProfile::Default, PolicyProfile::Debug),
+            apply_security(SecurityProfile::Denylist, PolicyProfile::Debug),
             SecurityProfile::Unconfined
         );
         assert_eq!(
@@ -196,11 +196,11 @@ mod tests {
 
     #[test]
     fn resolves_effective_policy_from_runtime_config() {
-        let policy = resolve_effective_policy(None, None, SecurityProfile::Default, LogMode::Auto)
+        let policy = resolve_effective_policy(None, None, SecurityProfile::Denylist, LogMode::Auto)
             .expect("default policy");
 
         assert_eq!(policy.profile, PolicyProfile::None);
-        assert_eq!(policy.security_profile, SecurityProfile::Default);
+        assert_eq!(policy.security_profile, SecurityProfile::Denylist);
         assert_eq!(policy.log_mode, LogMode::Auto);
         assert!(policy.cgroup_config.is_none());
     }
