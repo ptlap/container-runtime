@@ -64,5 +64,16 @@ jobs:
           components: rustfmt, clippy
           cache: true
 
+      - name: Bootstrap example rootfs
+        run: sudo scripts/setup-rootfs.sh
+
+      - name: Build privileged test artifacts
+        run: |
+          cargo build --locked --bin crun
+          cargo test --locked --test root_runtime --no-run
+
       - name: Run privileged runtime suite
-        run: sudo -E env PATH="$PATH" cargo test --test root_runtime -- --ignored --nocapture
+        run: |
+          test_binary="$(find target/debug/deps -maxdepth 1 -type f -perm -u+x -name 'root_runtime-*' -print -quit)"
+          test -n "$test_binary"
+          sudo -E "$test_binary" --ignored --nocapture --test-threads=1

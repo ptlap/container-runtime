@@ -36,7 +36,7 @@ fn require_root() -> bool {
 fn root_runtime_test_lock() -> MutexGuard<'static, ()> {
     ROOT_RUNTIME_TEST_LOCK
         .lock()
-        .expect("root runtime test lock should not be poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn has_tty() -> bool {
