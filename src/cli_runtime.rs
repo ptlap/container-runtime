@@ -572,7 +572,7 @@ pub fn trace_container(id: &str, json: bool, strace: bool, duration_ms: u64) -> 
     print_trace_report(&report, json)
 }
 
-/// Inputs for `crun seccomp generate`.
+/// Inputs for `minicrun seccomp generate`.
 #[derive(Debug, Clone)]
 pub struct SeccompGenerateRequest<'a> {
     pub capture_paths: &'a [PathBuf],

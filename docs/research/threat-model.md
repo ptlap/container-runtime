@@ -21,13 +21,13 @@ given, or corrupt kernel memory. Every route runs through a syscall.
 
 The runtime has two independent security layers. The selected base profile is
 applied when the container process is prepared and is reapplied to namespace-
-joining `crun exec` sessions. Under `denylist`, it enables `no_new_privs`, removes
+joining `minicrun exec` sessions. Under `denylist`, it enables `no_new_privs`, removes
 capabilities, and denies a fixed set of host-impacting syscalls. Under
 `unconfined`, this base hardening is intentionally skipped.
 
 A generated profile is an optional second layer. It denies the syscalls the
 workload never used when `--seccomp enforce` is selected, and the same generated
-filter is installed for `crun exec` enforcement. Healthchecks deliberately do not
+filter is installed for `minicrun exec` enforcement. Healthchecks deliberately do not
 install this generated allowlist: they are operator-supplied probes, not the
 captured workload. They still receive the selected base profile, so omitting the
 allowlist does not make a `denylist` healthcheck unrestricted.
@@ -52,14 +52,14 @@ scalar arguments and could narrow some of these, but is not implemented here.
 **Anything below the syscall interface.** Speculative execution, DMA, firmware,
 and hypervisor bugs are all out of scope.
 
-**The runtime itself.** A bug in `crun` that lets a container influence what the
+**The runtime itself.** A bug in `minicrun` that lets a container influence what the
 runtime does before the filter is installed is not covered by the filter. The
 memfd self-exec in `selfexec.rs` addresses one specific instance of this class,
 where a container overwrites the runtime binary through `/proc/self/exe`.
 
 **The generated allowlist does not cover healthcheck probes.** They are not a
 fully confined execution context under the optional generated profile, but the
-base `denylist` security layer still applies. `crun exec` sessions get the
+base `denylist` security layer still applies. `minicrun exec` sessions get the
 container's generated filter when enforcement is enabled.
 
 ## Trust boundaries

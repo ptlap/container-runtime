@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/common.sh
 . "$REPO_ROOT/scripts/lib/common.sh"
 
-RUNTIME="$REPO_ROOT/target/release/crun"
+RUNTIME="$REPO_ROOT/target/release/minicrun"
 MANIFEST="$REPO_ROOT/workloads/workloads.json"
 BUNDLE_DIR="$REPO_ROOT/workloads"
 BASELINE="$REPO_ROOT/third_party/moby-profiles/seccomp/default.json"
@@ -34,7 +34,7 @@ usage() {
 Usage: scripts/experiment.sh [options]
 
   --workload NAME|all   Workload from workloads/workloads.json (default: all)
-  --arm NAME|all        unconfined | crun-default | learn | enforce | all
+  --arm NAME|all        unconfined | minicrun-denylist | learn | enforce | all
   --repeat N            Measured iterations per arm (default: 30)
   --warmup K            Discarded iterations per arm (default: 3)
   --net none|bridge     Override the manifest network mode
@@ -98,7 +98,7 @@ workload_json() {
 
 arm_list() {
     if [ "$ARMS" = "all" ]; then
-        echo "unconfined crun-default learn enforce"
+        echo "unconfined minicrun-denylist learn enforce"
     else
         echo "$ARMS" | tr ',' ' '
     fi
@@ -118,7 +118,7 @@ run_once() {
 
     case "$arm" in
         unconfined) extra=(--security unconfined) ;;
-        crun-default) extra=(--security denylist) ;;
+        minicrun-denylist) extra=(--security denylist) ;;
         learn)
             extra=(--security unconfined --seccomp learn
                    --seccomp-out "$RESULT_DIR/captures/${workload}-${iteration}.json")

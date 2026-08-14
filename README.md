@@ -1,4 +1,7 @@
-# container-runtime
+# minicrun
+
+[![CI](https://github.com/ptlap/container-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/ptlap/container-runtime/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A minimal Linux container runtime written in Rust for studying how containers are
 built from kernel primitives: namespaces, cgroups v2, rootfs isolation, and
@@ -60,25 +63,25 @@ bridge` to include veth and NAT setup overhead.
 ## Run
 
 ```bash
-sudo target/release/crun run --net bridge --security denylist demo examples/bundle
+sudo target/release/minicrun run --net bridge --security denylist demo examples/bundle
 ```
 
 Lifecycle form:
 
 ```bash
-sudo target/release/crun create --net bridge --security denylist demo examples/bundle
-sudo target/release/crun state demo --json
-sudo target/release/crun start demo
+sudo target/release/minicrun create --net bridge --security denylist demo examples/bundle
+sudo target/release/minicrun state demo --json
+sudo target/release/minicrun start demo
 ```
 
 Useful commands from another terminal:
 
 ```bash
-sudo target/release/crun state demo --json
-sudo target/release/crun stats demo --json
-sudo target/release/crun stop demo --timeout 10
-sudo target/release/crun kill demo --signal SIGTERM
-sudo target/release/crun delete demo
+sudo target/release/minicrun state demo --json
+sudo target/release/minicrun stats demo --json
+sudo target/release/minicrun stop demo --timeout 10
+sudo target/release/minicrun kill demo --signal SIGTERM
+sudo target/release/minicrun delete demo
 ```
 
 Network modes:
@@ -103,19 +106,19 @@ turn that into a minimal allowlist:
 
 ```bash
 # Observe. Every syscall traps to a tracer; nothing is denied.
-sudo target/release/crun run --seccomp learn --seccomp-out /tmp/demo.trace.json \
+sudo target/release/minicrun run --seccomp learn --seccomp-out /tmp/demo.trace.json \
   demo examples/bundle
 
 # Generate an OCI linux.seccomp profile from one or more captures.
-sudo target/release/crun seccomp generate --capture /tmp/demo.trace.json \
+sudo target/release/minicrun seccomp generate --capture /tmp/demo.trace.json \
   -o /tmp/demo.seccomp.json --name demo
 
 # Enforce it.
-sudo target/release/crun run --seccomp enforce --seccomp-profile /tmp/demo.seccomp.json \
+sudo target/release/minicrun run --seccomp enforce --seccomp-profile /tmp/demo.seccomp.json \
   demo2 examples/bundle
 
 # Measure it against Docker's default profile and a CVE dataset.
-target/release/crun seccomp compare /tmp/demo.seccomp.json \
+target/release/minicrun seccomp compare /tmp/demo.seccomp.json \
   --baseline third_party/moby-profiles/seccomp/default.json \
   --cve-map data/cve-syscall-map.json --json
 ```
@@ -129,7 +132,7 @@ runc or youki unchanged. Provenance travels alongside under `crunMetadata`.
 
 ### Healthcheck security boundary
 
-Healthchecks run through the same namespace-joining execution path as `crun
+Healthchecks run through the same namespace-joining execution path as `minicrun
 exec`, but they intentionally do not install the generated seccomp allowlist.
 The container's base security profile is still applied: under `denylist`,
 `no_new_privs`, capability removal, and the fixed host-impacting syscall denylist
@@ -146,7 +149,7 @@ reruns with `sudo scripts/reproduce.sh --quick`.
 - OCI support is partial: `create` writes state without creating a process, and
   `start` blocks until the container exits, so there is no detached mode.
 - Healthcheck probes do not install the generated seccomp allowlist, by design;
-  they still receive the container's base security profile, while `crun exec`
+  they still receive the container's base security profile, while `minicrun exec`
   installs the generated profile when enforcement is enabled.
 - Learn mode observes only the paths a run exercised, so a generated profile can
   miss syscalls a rarer path needs. See `docs/research/limitations.md`.
@@ -154,3 +157,12 @@ reruns with `sudo scripts/reproduce.sh --quick`.
   bridge, so containers cannot reach each other.
 - The runtime expects an unpacked rootfs; use `scripts/build-workloads.sh` with
   skopeo and umoci to produce bundles from images.
+
+## Contributing and security
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Report
+suspected vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+minicrun is available under the [MIT License](LICENSE).

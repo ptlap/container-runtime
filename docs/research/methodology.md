@@ -1,7 +1,7 @@
 # Methodology
 
 How every number in the evaluation is defined and produced. The formulas here
-are what `crun seccomp compare` computes and what `scripts/experiment.sh`
+are what `minicrun seccomp compare` computes and what `scripts/experiment.sh`
 records.
 
 ## Definitions
@@ -128,7 +128,7 @@ strict subset.
   frequency drift is shared instead of biasing whichever ran first.
 - `--log on` always, so container output goes to its own file and never mixes
   with runtime diagnostics, which go to stderr.
-- Unique container ids per iteration, `crun doctor --fix` between arms.
+- Unique container ids per iteration, `minicrun doctor --fix` between arms.
 - Warmups discarded rather than caches dropped. Dropping caches measures the
   disk, not the filter.
 - Kernel, CPU, core count, load average, image digests, git commit and the

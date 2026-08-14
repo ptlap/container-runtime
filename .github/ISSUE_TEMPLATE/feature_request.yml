@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a focused improvement to minicrun
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the CLI or runtime behavior you propose.
+    validations:
+      required: true
+  - type: textarea
+    id: host_impact
+    attributes:
+      label: Host impact and cleanup
+      description: Describe effects on namespaces, mounts, cgroups, networking, state, and failure cleanup.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider?

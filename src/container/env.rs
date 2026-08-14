@@ -3,7 +3,7 @@ use nix::libc;
 
 /// Replaces the whole process environment with the container configuration.
 ///
-/// The runtime inherits the environment of whoever invoked `crun`, including
+/// The runtime inherits the environment of whoever invoked `minicrun`, including
 /// `SUDO_*` and the caller's `PATH`, and `execvp` would hand all of it to the
 /// container. Clearing first makes the container environment a function of the
 /// bundle alone, which is what the OCI spec describes and what keeps syscall

@@ -47,7 +47,7 @@ for performance figures.
 ## Runtime
 
 **Healthchecks omit the generated profile but keep the base security layer.**
-seccomp is not inherited through `setns`, so a `crun exec` session has to install
+seccomp is not inherited through `setns`, so a `minicrun exec` session has to install
 the container's generated filter itself; it now does. Healthchecks deliberately
 set `seccomp_program` to none because they are the operator's own probe rather
 than container-controlled workload code. The selected base security profile is
@@ -59,12 +59,12 @@ syscall absent from the workload capture would otherwise be reported unhealthy.
 **`create` and `start` are not OCI conformant.** `create` writes a state file and
 creates no process; `start` does the whole fork and exec and blocks until the
 container exits. There is no detached mode. Scripts and tests background the
-`crun run` process from the shell instead, which is sufficient for every
+`minicrun run` process from the shell instead, which is sufficient for every
 measurement here but is not what the specification describes.
 
 **Cleanup depends on the foreground process surviving.** Teardown of the cgroup,
 veth pair, NAT rules and state file happens in a `Drop` implementation, which
-does not run when the runtime is killed with SIGKILL. `crun doctor --fix`
+does not run when the runtime is killed with SIGKILL. `minicrun doctor --fix`
 recovers afterwards rather than preventing the leak.
 
 **`--net bridge` has no bridge.** It creates a veth pair per container with its

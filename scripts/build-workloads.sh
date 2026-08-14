@@ -202,8 +202,8 @@ for name in $(workload_names); do
 }
 EOF
 
-    if [ -x "$REPO_ROOT/target/release/crun" ]; then
-        "$REPO_ROOT/target/release/crun" validate "$bundle" || {
+    if [ -x "$REPO_ROOT/target/release/minicrun" ]; then
+        "$REPO_ROOT/target/release/minicrun" validate "$bundle" || {
             echo "error: generated bundle failed validation: $bundle" >&2
             exit 1
         }

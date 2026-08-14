@@ -7,7 +7,7 @@ description = "A minimal OCI-compliant container runtime written in Rust"
 license = "MIT"
 
 [[bin]]
-name = "crun"
+name = "minicrun"
 path = "src/main.rs"
 
 [lib]

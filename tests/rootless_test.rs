@@ -2,32 +2,32 @@ use std::process::Command;
 
 #[test]
 fn test_cli_help() {
-    let mut cmd = Command::new("target/debug/crun");
+    let mut cmd = Command::new("target/debug/minicrun");
     cmd.arg("--help");
-    let output = cmd.output().expect("failed to run crun");
+    let output = cmd.output().expect("failed to run minicrun");
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("crun"));
+    assert!(stdout.contains("minicrun"));
 }
 
 #[test]
 fn test_cli_invalid_command() {
-    let mut cmd = Command::new("target/debug/crun");
+    let mut cmd = Command::new("target/debug/minicrun");
     cmd.arg("invalid-command-xyz");
-    let output = cmd.output().expect("failed to run crun");
+    let output = cmd.output().expect("failed to run minicrun");
     assert!(!output.status.success());
 }
 
 #[test]
 fn test_cli_log_args() {
-    let mut cmd = Command::new("target/debug/crun");
+    let mut cmd = Command::new("target/debug/minicrun");
     cmd.arg("--log-level")
         .arg("debug")
         .arg("--log-format")
         .arg("json")
         .arg("state")
         .arg("non-existent-container");
-    let output = cmd.output().expect("failed to run crun");
+    let output = cmd.output().expect("failed to run minicrun");
     assert!(!output.status.success());
 }
 
@@ -37,10 +37,12 @@ mod seccomp_cli {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
 
-    fn crun() -> PathBuf {
-        std::env::var_os("CARGO_BIN_EXE_crun")
+    fn minicrun() -> PathBuf {
+        std::env::var_os("CARGO_BIN_EXE_minicrun")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/crun"))
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/minicrun")
+            })
     }
 
     fn repo_root() -> PathBuf {
@@ -52,10 +54,10 @@ mod seccomp_cli {
     }
 
     fn run(args: &[&str]) -> Output {
-        Command::new(crun())
+        Command::new(minicrun())
             .args(args)
             .output()
-            .expect("failed to execute crun")
+            .expect("failed to execute minicrun")
     }
 
     fn write_capture(path: &Path) {

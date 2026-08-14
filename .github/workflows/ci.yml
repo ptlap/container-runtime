@@ -69,7 +69,7 @@ jobs:
 
       - name: Build privileged test artifacts
         run: |
-          cargo build --locked --bin crun
+          cargo build --locked --bin minicrun
           cargo test --locked --test root_runtime --no-run
 
       - name: Run privileged runtime suite

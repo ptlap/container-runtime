@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-runtime="${RUNTIME:-./target/release/crun}"
+runtime="${RUNTIME:-./target/release/minicrun}"
 rootfs="$(realpath examples/bundle/rootfs)"
 tmp_root="$(mktemp -d /tmp/crun-e2e.XXXXXX)"
 

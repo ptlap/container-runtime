@@ -27,7 +27,7 @@ const DEFAULT_STOP_TIMEOUT_SECS: u64 = 10;
 const DEFAULT_EVENTS_INTERVAL_MS: u64 = 1000;
 
 #[derive(Debug, Parser)]
-#[command(name = "crun")]
+#[command(name = "minicrun")]
 #[command(about = "A minimal Linux container runtime written in Rust")]
 struct Cli {
     #[arg(long, default_value = "info", global = true)]
@@ -842,8 +842,8 @@ fn execute_container(options: RunOptions, existing_state: Option<ContainerState>
     exit_with_process_status(report.exit_code, report.exit_signal.as_deref());
 }
 
-/// Rebuilds the seccomp options recorded at create time so `crun start` runs
-/// the container the way `crun create` described it.
+/// Rebuilds the seccomp options recorded at create time so `minicrun start` runs
+/// the container the way `minicrun create` described it.
 fn seccomp_options_from_state(state: &ContainerState) -> Result<SeccompOptions> {
     let mode = seccomp::parse_mode(&state.seccomp_mode)?;
     let action = state

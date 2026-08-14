@@ -43,7 +43,7 @@ path that later enforces the profile.
 
 That has three consequences the prior work does not have:
 
-1. **No separate tooling step.** `crun run --seccomp learn` and `crun run
+1. **No separate tooling step.** `minicrun run --seccomp learn` and `minicrun run
    --seccomp enforce` are the same command with one flag changed, against the
    same bundle, with the same namespace, cgroup and rootfs setup. Nothing about
    the observed run differs from the enforced run except the filter.
@@ -55,8 +55,8 @@ That has three consequences the prior work does not have:
    `write`, `futex` and `epoll_wait` first measurably shortens the average path.
    libseccomp cannot do this: it has no frequency data to sort by.
 
-3. **The runtime can report on itself.** `crun inspect-security` shows the mode,
-   the profile and how many syscalls it allows; `crun seccomp compare` measures
+3. **The runtime can report on itself.** `minicrun inspect-security` shows the mode,
+   the profile and how many syscalls it allows; `minicrun seccomp compare` measures
    a profile against Docker's and against a CVE dataset from inside the same
    tool that produced it.
 

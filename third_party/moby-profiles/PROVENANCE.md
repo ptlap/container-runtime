@@ -20,7 +20,7 @@ filters on architecture and capabilities, which are a Docker extension rather
 than part of the OCI schema. A rule gated on `CAP_SYS_ADMIN` does not apply to a
 container that was never granted it.
 
-Counted with `crun seccomp compare`, which models Docker's default capability
+Counted with `minicrun seccomp compare`, which models Docker's default capability
 set, on x86_64:
 
 | Measure | Count |

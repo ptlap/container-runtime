@@ -222,7 +222,7 @@ impl ContainerState {
     }
 
     /// Mark the container as stopped. The `log_path` is intentionally preserved
-    /// so that `crun logs` can read container output after the container exits.
+    /// so that `minicrun logs` can read container output after the container exits.
     pub fn mark_stopped(&mut self, exit_code: Option<i32>, signal: Option<String>) -> Result<()> {
         self.pid = None;
         self.process_starttime = None;

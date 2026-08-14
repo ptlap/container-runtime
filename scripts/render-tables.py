@@ -14,7 +14,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARM_LABELS = {
     "unconfined": "unconfined",
-    "crun-default": "crun default",
+    "minicrun-denylist": "minicrun denylist",
     "learn": "learn",
     "enforce": "enforce",
 }

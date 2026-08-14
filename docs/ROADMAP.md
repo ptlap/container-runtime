@@ -30,9 +30,9 @@ Root-required runtime tests must be run manually by the user when Codex cannot
 run them:
 
 ```bash
-sudo target/release/crun ps
-sudo target/release/crun run --net none --security unconfined smoke examples/bundle
-sudo target/release/crun delete smoke
+sudo target/release/minicrun ps
+sudo target/release/minicrun run --net none --security unconfined smoke examples/bundle
+sudo target/release/minicrun delete smoke
 ```
 
 ## Goal 1: Root-Required Integration Test Harness
@@ -53,12 +53,12 @@ sudo cargo test --test root_runtime -- --ignored --nocapture
 sudo scripts/e2e.sh
 ```
 
-## Goal 2: `crun doctor`
+## Goal 2: `minicrun doctor`
 
 Objective: add operational recovery checks for stale runtime resources.
 
-- [x] Add `crun doctor`.
-- [x] Add `crun doctor --fix`.
+- [x] Add `minicrun doctor`.
+- [x] Add `minicrun doctor --fix`.
 - [x] Detect stale running state with dead PID.
 - [x] Detect orphan cgroups under `/sys/fs/cgroup/container-runtime`.
 - [x] Detect stale bridge network allocations.
@@ -67,16 +67,16 @@ Objective: add operational recovery checks for stale runtime resources.
 Pass:
 
 ```bash
-sudo target/release/crun doctor
-sudo target/release/crun doctor --fix
-sudo target/release/crun ps
+sudo target/release/minicrun doctor
+sudo target/release/minicrun doctor --fix
+sudo target/release/minicrun ps
 ```
 
-## Goal 3: `crun inspect-security`
+## Goal 3: `minicrun inspect-security`
 
 Objective: make security posture visible and demo-friendly.
 
-- [x] Add `crun inspect-security <id> [--json]`.
+- [x] Add `minicrun inspect-security <id> [--json]`.
 - [x] Report `NoNewPrivs`, seccomp mode, capabilities, userns mode.
 - [x] Report readonly rootfs, mount mode, memory limit, pids limit, CPU limit.
 - [x] Return warnings for weak posture: host userns, unconfined security, no limits.
@@ -84,16 +84,16 @@ Objective: make security posture visible and demo-friendly.
 Pass:
 
 ```bash
-sudo target/release/crun run --net none --security denylist sec-demo examples/bundle
-sudo target/release/crun inspect-security sec-demo --json
-sudo target/release/crun delete sec-demo
+sudo target/release/minicrun run --net none --security denylist sec-demo examples/bundle
+sudo target/release/minicrun inspect-security sec-demo --json
+sudo target/release/minicrun delete sec-demo
 ```
 
 ## Goal 4: Overlay Rootfs Diff
 
 Objective: show what changed inside an overlay-backed container.
 
-- [x] Add `crun diff <id>`.
+- [x] Add `minicrun diff <id>`.
 - [x] Read overlay `upperdir` from state or config.
 - [x] Classify created, modified, and deleted whiteout entries.
 - [x] Support text and JSON output.
@@ -101,10 +101,10 @@ Objective: show what changed inside an overlay-backed container.
 Pass:
 
 ```bash
-sudo target/release/crun run --net none diff-demo <overlay-bundle>
+sudo target/release/minicrun run --net none diff-demo <overlay-bundle>
 # inside container: touch /new-file; rm /some-file; exit
-sudo target/release/crun diff diff-demo --json
-sudo target/release/crun delete diff-demo
+sudo target/release/minicrun diff diff-demo --json
+sudo target/release/minicrun delete diff-demo
 ```
 
 ## Goal 5: Runtime Audit Log
@@ -113,23 +113,23 @@ Objective: persist lifecycle and runtime events for later inspection.
 
 - [x] Write `/run/crun-rs/<id>/runtime.log`.
 - [x] Log `created`, `started`, `exec`, `health`, `event`, `stopped`, `deleted`.
-- [x] Add `crun events <id> --history`.
+- [x] Add `minicrun events <id> --history`.
 - [x] Use JSON lines internally for stable parsing.
 
 Pass:
 
 ```bash
-sudo target/release/crun create audit-demo examples/bundle
-sudo target/release/crun start audit-demo
-sudo target/release/crun events audit-demo --history --json
-sudo target/release/crun delete audit-demo
+sudo target/release/minicrun create audit-demo examples/bundle
+sudo target/release/minicrun start audit-demo
+sudo target/release/minicrun events audit-demo --history --json
+sudo target/release/minicrun delete audit-demo
 ```
 
 ## Goal 6: Health Watch Mode
 
 Objective: turn healthcheck into a platform-like loop.
 
-- [x] Add `crun health <id> --watch --interval-ms 1000`.
+- [x] Add `minicrun health <id> --watch --interval-ms 1000`.
 - [x] Keep updating health state until the container stops.
 - [x] Honor `retries`.
 - [x] Emit health events into runtime audit log when Goal 5 exists.
@@ -137,17 +137,17 @@ Objective: turn healthcheck into a platform-like loop.
 Pass:
 
 ```bash
-sudo target/release/crun run --net none --security unconfined health-demo /tmp/crun-health-bundle
-sudo target/release/crun health health-demo --watch --interval-ms 500
-sudo target/release/crun state health-demo --json
-sudo target/release/crun delete health-demo
+sudo target/release/minicrun run --net none --security unconfined health-demo /tmp/crun-health-bundle
+sudo target/release/minicrun health health-demo --watch --interval-ms 500
+sudo target/release/minicrun state health-demo --json
+sudo target/release/minicrun delete health-demo
 ```
 
 ## Goal 7: OCI Compatibility Layer
 
 Objective: support a clearer and larger OCI subset.
 
-- [x] Add `crun validate <bundle>`.
+- [x] Add `minicrun validate <bundle>`.
 - [x] Support `process.user`.
 - [x] Support `process.capabilities`.
 - [x] Support `process.rlimits`.
@@ -157,10 +157,10 @@ Objective: support a clearer and larger OCI subset.
 Pass:
 
 ```bash
-target/release/crun validate examples/bundle
-target/release/crun validate /tmp/bad-bundle
-sudo target/release/crun run --net none oci-demo examples/bundle
-sudo target/release/crun delete oci-demo
+target/release/minicrun validate examples/bundle
+target/release/minicrun validate /tmp/bad-bundle
+sudo target/release/minicrun run --net none oci-demo examples/bundle
+sudo target/release/minicrun delete oci-demo
 ```
 
 ## Goal 8: Resource Policy Profiles
@@ -176,35 +176,35 @@ Objective: provide secure defaults as named profiles.
 Pass:
 
 ```bash
-sudo target/release/crun run --net none restricted-demo <restricted-bundle>
-sudo target/release/crun inspect-security restricted-demo --json
-sudo target/release/crun delete restricted-demo
+sudo target/release/minicrun run --net none restricted-demo <restricted-bundle>
+sudo target/release/minicrun inspect-security restricted-demo --json
+sudo target/release/minicrun delete restricted-demo
 ```
 
 ## Goal 9: Image Import Minimal
 
 Objective: move from rootfs-only input to minimal local image storage.
 
-- [x] Add `crun image import <rootfs.tar> <name>`.
+- [x] Add `minicrun image import <rootfs.tar> <name>`.
 - [x] Store under `/var/lib/crun-rs/images/<name>/rootfs`.
-- [x] Add `crun image list`.
-- [x] Add `crun run-image <name> <id>`.
+- [x] Add `minicrun image list`.
+- [x] Add `minicrun run-image <name> <id>`.
 - [x] Keep registry/pull out of scope.
 
 Pass:
 
 ```bash
-sudo target/release/crun image import alpine-rootfs.tar alpine
-sudo target/release/crun image list
-sudo target/release/crun run-image alpine image-demo
-sudo target/release/crun delete image-demo
+sudo target/release/minicrun image import alpine-rootfs.tar alpine
+sudo target/release/minicrun image list
+sudo target/release/minicrun run-image alpine image-demo
+sudo target/release/minicrun delete image-demo
 ```
 
 ## Goal 10: Trace Mode
 
 Objective: expose kernel/process behavior during runtime operations.
 
-- [x] Add `crun trace <id>`.
+- [x] Add `minicrun trace <id>`.
 - [x] Start with process tree and `/proc/<pid>/status`.
 - [x] Add optional `strace` integration if installed.
 - [x] Keep eBPF as optional research extension.
@@ -212,7 +212,7 @@ Objective: expose kernel/process behavior during runtime operations.
 Pass:
 
 ```bash
-sudo target/release/crun trace demo --json
+sudo target/release/minicrun trace demo --json
 ```
 
 ## Goal 11: Checkpoint/Restore Research Mode
@@ -220,16 +220,16 @@ sudo target/release/crun trace demo --json
 Objective: optional academic extension using CRIU.
 
 - [x] Detect `criu` availability.
-- [x] Add `crun checkpoint <id>`.
-- [x] Add `crun restore <id>`.
+- [x] Add `minicrun checkpoint <id>`.
+- [x] Add `minicrun restore <id>`.
 - [x] Mark experimental in CLI output.
 
 Pass:
 
 ```bash
 criu --version
-sudo target/release/crun checkpoint ckpt-demo
-sudo target/release/crun restore ckpt-demo
+sudo target/release/minicrun checkpoint ckpt-demo
+sudo target/release/minicrun restore ckpt-demo
 ```
 
 ## Goal 12: Benchmark Suite Polish
@@ -278,7 +278,7 @@ Objective: stop the host environment and runtime chatter from contaminating
 container behaviour and machine-readable output.
 
 - [x] Clear the inherited environment before `execvp` in `container/process.rs`.
-- [x] Clear it on the `crun exec` path in `container_exec.rs` as well.
+- [x] Clear it on the `minicrun exec` path in `container_exec.rs` as well.
 - [x] Route library-level `println!` and `eprintln!` through `tracing`, on stderr.
 - [x] Add a root test asserting the container environment equals the bundle's.
 
@@ -286,9 +286,9 @@ Pass:
 
 ```bash
 cargo clippy --all-targets --all-features
-FOO=leak sudo -E target/release/crun run --log on envtest examples/bundle
-sudo target/release/crun logs envtest | grep -c FOO   # expects 0
-sudo target/release/crun delete envtest
+FOO=leak sudo -E target/release/minicrun run --log on envtest examples/bundle
+sudo target/release/minicrun logs envtest | grep -c FOO   # expects 0
+sudo target/release/minicrun delete envtest
 ```
 
 ## Goal 15: Concurrent-Safe State Writes
@@ -323,8 +323,8 @@ Pass:
 ```bash
 cargo test filesystem
 cargo test spec::config
-sudo target/release/crun run --net none mounts-demo examples/bundle
-sudo target/release/crun delete mounts-demo
+sudo target/release/minicrun run --net none mounts-demo examples/bundle
+sudo target/release/minicrun delete mounts-demo
 ```
 
 ## Goal 17: Seccomp Filter and Profile Infrastructure
@@ -343,7 +343,7 @@ Pass:
 
 ```bash
 cargo test seccomp
-target/release/crun seccomp compile <profile> --json
+target/release/minicrun seccomp compile <profile> --json
 ```
 
 ## Goal 18: Learn and Enforce Modes
@@ -354,16 +354,16 @@ Objective: capture what a workload really uses, and run it under nothing else.
 - [x] Trace with `PTRACE_O_TRACESECCOMP` and follow forks, vforks, clones and threads.
 - [x] Hand the log helper and pty proxy statuses back from the tracer.
 - [x] Write captures to `/run/crun-rs/<id>/syscalls.json`.
-- [x] Add `crun seccomp generate|inspect|compare|compile`.
-- [x] Record the mode, profile and action in state so `crun start` reproduces them.
+- [x] Add `minicrun seccomp generate|inspect|compare|compile`.
+- [x] Record the mode, profile and action in state so `minicrun start` reproduces them.
 
 Pass:
 
 ```bash
 sudo cargo test --test root_runtime -- --ignored --nocapture
-sudo target/release/crun run --seccomp learn --seccomp-out /tmp/x.json demo examples/bundle
-sudo target/release/crun seccomp generate --capture /tmp/x.json -o /tmp/x.seccomp.json
-sudo target/release/crun run --seccomp enforce --seccomp-profile /tmp/x.seccomp.json demo2 examples/bundle
+sudo target/release/minicrun run --seccomp learn --seccomp-out /tmp/x.json demo examples/bundle
+sudo target/release/minicrun seccomp generate --capture /tmp/x.json -o /tmp/x.seccomp.json
+sudo target/release/minicrun run --seccomp enforce --seccomp-profile /tmp/x.seccomp.json demo2 examples/bundle
 ```
 
 ## Goal 19: Evaluation Data and Harness
@@ -409,7 +409,7 @@ Objective: the work that deepens the evaluation once the core numbers exist.
 
 - [ ] Compare a binary-search filter against the linear chain.
 - [ ] Add an eBPF capture backend behind a feature flag and compare its overhead.
-- [x] Apply the container's filter to `crun exec`.
+- [x] Apply the container's filter to `minicrun exec`.
 - [ ] Give `create` and `start` OCI semantics with a detached container process.
 - [ ] Rename `--net bridge`, which is really per-container veth plus NAT.
 
@@ -423,9 +423,9 @@ sudo scripts/experiment.sh --workload all --arm all --repeat 30 --tag final
 ## Recommended Execution Order
 
 1. Root-required integration test harness.
-2. `crun doctor`.
-3. `crun inspect-security`.
-4. Overlay `crun diff`.
+2. `minicrun doctor`.
+3. `minicrun inspect-security`.
+4. Overlay `minicrun diff`.
 5. Runtime audit log.
 6. Health watch mode.
 7. OCI compatibility layer.

@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible problem in minicrun
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities here. Use GitHub Private Vulnerability Reporting instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest bundle, config, and command sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include minicrun commit/version, Linux distribution, kernel, cgroup mode, architecture, and whether the command ran as root.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant sanitized output or logs.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues for duplicates.
+          required: true
+        - label: This report does not contain a security vulnerability or sensitive host data.
+          required: true

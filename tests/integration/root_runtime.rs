@@ -10,10 +10,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static ROOT_RUNTIME_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn crun() -> PathBuf {
-    std::env::var_os("CARGO_BIN_EXE_crun")
+fn minicrun() -> PathBuf {
+    std::env::var_os("CARGO_BIN_EXE_minicrun")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/crun"))
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/minicrun")
+        })
 }
 
 fn repo_root() -> PathBuf {
@@ -59,10 +61,10 @@ fn unique_name(prefix: &str) -> String {
 }
 
 fn run_crun(args: &[&str]) -> Output {
-    Command::new(crun())
+    Command::new(minicrun())
         .args(args)
         .output()
-        .expect("failed to execute crun")
+        .expect("failed to execute minicrun")
 }
 
 fn assert_success(output: &Output) {
@@ -161,7 +163,7 @@ impl RunningContainer {
     }
 
     fn start_with_security(id: String, bundle: &Path, security: &str) -> Self {
-        let child = Command::new(crun())
+        let child = Command::new(minicrun())
             .args([
                 "run",
                 "--net",
@@ -174,7 +176,7 @@ impl RunningContainer {
             ])
             .arg(bundle)
             .spawn()
-            .expect("failed to start crun run");
+            .expect("failed to start minicrun run");
 
         wait_until_running(&id);
         Self { id, child }
@@ -223,7 +225,7 @@ impl Drop for TempFile {
 }
 
 fn learn_capture(id: &str, bundle: &Path, capture: &Path, args_note: &str) -> Output {
-    let output = Command::new(crun())
+    let output = Command::new(minicrun())
         .args([
             "run",
             "--net",
@@ -240,7 +242,7 @@ fn learn_capture(id: &str, bundle: &Path, capture: &Path, args_note: &str) -> Ou
         .arg(id)
         .arg(bundle)
         .output()
-        .unwrap_or_else(|error| panic!("failed to run crun for {args_note}: {error}"));
+        .unwrap_or_else(|error| panic!("failed to run minicrun for {args_note}: {error}"));
     assert_success(&output);
     output
 }
@@ -353,7 +355,7 @@ fn a_generated_profile_runs_the_workload_it_was_learned_from() {
     learn_capture(&learn_id, &bundle.path, &capture.path, "profile generation");
     assert_success(&run_crun(&["delete", &learn_id]));
 
-    let generate = Command::new(crun())
+    let generate = Command::new(minicrun())
         .arg("seccomp")
         .arg("generate")
         .arg("--capture")
@@ -363,7 +365,7 @@ fn a_generated_profile_runs_the_workload_it_was_learned_from() {
         .arg("--name")
         .arg("shell")
         .output()
-        .expect("failed to run crun seccomp generate");
+        .expect("failed to run minicrun seccomp generate");
     assert_success(&generate);
 
     let content = fs::read_to_string(&profile.path).expect("profile should be written");
@@ -374,7 +376,7 @@ fn a_generated_profile_runs_the_workload_it_was_learned_from() {
         .is_some_and(|names| !names.is_empty()));
 
     let enforce_id = unique_name("root-gen-enforce");
-    let enforced = Command::new(crun())
+    let enforced = Command::new(minicrun())
         .args([
             "run",
             "--net",
@@ -421,7 +423,7 @@ fn an_enforced_profile_denies_a_syscall_it_never_learned() {
     learn_capture(&learn_id, &learn_bundle.path, &capture.path, "denial");
     assert_success(&run_crun(&["delete", &learn_id]));
 
-    let generate = Command::new(crun())
+    let generate = Command::new(minicrun())
         .arg("seccomp")
         .arg("generate")
         .arg("--capture")
@@ -429,7 +431,7 @@ fn an_enforced_profile_denies_a_syscall_it_never_learned() {
         .arg("-o")
         .arg(&profile.path)
         .output()
-        .expect("failed to run crun seccomp generate");
+        .expect("failed to run minicrun seccomp generate");
     assert_success(&generate);
 
     let deny_id = unique_name("root-deny-run");
@@ -440,7 +442,7 @@ fn an_enforced_profile_denies_a_syscall_it_never_learned() {
     )
     .expect("bundle should be created");
 
-    let output = Command::new(crun())
+    let output = Command::new(minicrun())
         .args([
             "run",
             "--net",
@@ -481,7 +483,7 @@ fn container_env_is_not_inherited_from_host() {
     let bundle = TestBundle::new("bundle-env", &["/bin/sh", "-c", "env"], "")
         .expect("bundle should be created");
 
-    let output = Command::new(crun())
+    let output = Command::new(minicrun())
         .args([
             "run",
             "--net",
@@ -495,7 +497,7 @@ fn container_env_is_not_inherited_from_host() {
         .arg(&bundle.path)
         .env("CRUN_TEST_LEAK", "leaked-from-host")
         .output()
-        .expect("failed to run crun");
+        .expect("failed to run minicrun");
     assert_success(&output);
 
     let logs = run_crun(&["logs", &id]);
@@ -540,7 +542,7 @@ fn private_userns_accepts_explicit_root_credentials() {
     )
     .expect("config should be written");
 
-    let output = Command::new(crun())
+    let output = Command::new(minicrun())
         .args([
             "run",
             "--net",
@@ -855,7 +857,7 @@ fn tty_run_works_when_terminal_is_available() {
     let output_path = std::env::temp_dir().join(unique_name("crun-tty"));
     let command = format!(
         "{} run -t --net none --security unconfined {} {}",
-        crun().display(),
+        minicrun().display(),
         id,
         bundle.path.display()
     );

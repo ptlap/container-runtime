@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-runtime="./target/release/crun"
+runtime="./target/release/minicrun"
 bundle="./examples/bundle"
 iterations=30
 net="none"
@@ -15,7 +15,7 @@ usage() {
 Usage: scripts/benchmark.sh [options]
 
 Options:
-  --runtime PATH       Runtime binary to execute (default: ./target/release/crun)
+  --runtime PATH       Runtime binary to execute (default: ./target/release/minicrun)
   --bundle PATH        Bundle with rootfs/config.json (default: ./examples/bundle)
   --iterations N       Number of runs (default: 30)
   --net MODE           Network mode: none, bridge, host (default: none)

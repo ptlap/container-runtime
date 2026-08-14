@@ -18,7 +18,7 @@ Usage: scripts/reproduce.sh [options]
 
   --tag NAME          Result tag (default: today's date)
   --quick             busybox and redis only, 5 iterations
-  --skip-build        Assume target/release/crun is current
+  --skip-build        Assume target/release/minicrun is current
   --skip-workloads    Assume workloads/ is already built
   -h, --help          Show this help
 

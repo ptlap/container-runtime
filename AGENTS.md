@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 
 This is a Rust container-runtime prototype. Core source lives in `src/`:
-`main.rs` defines the `crun` CLI, `lib.rs` exports modules, and submodules cover
+`main.rs` defines the `minicrun` CLI, `lib.rs` exports modules, and submodules cover
 container orchestration, cgroups, filesystem setup, namespaces, networking, and
 OCI-like config parsing. Example runtime input is in `examples/bundle/`. Project
 notes and planning live in `docs/`, especially `docs/ROADMAP.md`, with
@@ -14,13 +14,13 @@ rootfs setup and benchmarking belong in `scripts/`. Tests are split under
 ## Build, Test, and Development Commands
 
 - `cargo build`: compile the debug binary and library.
-- `cargo build --release`: build the optimized `target/release/crun` binary.
+- `cargo build --release`: build the optimized `target/release/minicrun` binary.
 - `cargo test`: run unit, integration, and doc tests.
 - `cargo fmt --check`: verify Rust formatting.
-- `cargo clippy --lib --bin crun --all-features`: lint the main library and CLI.
+- `cargo clippy --lib --bin minicrun --all-features`: lint the main library and CLI.
 - `cargo clippy --all-targets --all-features`: full lint pass; keep this green
   once benchmarks are implemented.
-- `sudo target/release/crun run examples/bundle`: run the example bundle. Most
+- `sudo target/release/minicrun run examples/bundle`: run the example bundle. Most
   namespace, mount, cgroup, and network operations require root.
 
 If a required Rust command cannot run inside the agent sandbox, list it at the
@@ -78,6 +78,6 @@ When implementing roadmap goals:
 - Use existing runtime/container helpers from `src/container/mod.rs`.
 - For host resources, always define cleanup behavior: cgroups, veth, NAT, mounts, state files.
 - Root-required tests must live under `tests/integration/` and be `#[ignore]` or self-skip when not root.
-- Tests should call the `crun` binary like a user would.
+- Tests should call the `minicrun` binary like a user would.
 - Avoid broad refactors while implementing a single roadmap goal.
 - Avoid `unwrap()` and `expect()` in runtime code; they are acceptable only in tests.

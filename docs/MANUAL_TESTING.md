@@ -1,6 +1,6 @@
 # 🧪 Kịch Bản Kiểm Thử Thủ Công Toàn Diện (Comprehensive Manual Testing Scenarios)
 
-Tài liệu này cung cấp các kịch bản kiểm thử chi tiết bao quát toàn bộ các tính năng hiện có của runtime `crun` nhằm kiểm chứng các cơ chế cô lập của nhân Linux (Namespaces, Cgroups v2, Seccomp, Chặn Privilege Escalation), Mạng ảo, Quản lý ảnh cục bộ, và các tính năng chẩn đoán đặc biệt khác.
+Tài liệu này cung cấp các kịch bản kiểm thử chi tiết bao quát toàn bộ các tính năng hiện có của runtime `minicrun` nhằm kiểm chứng các cơ chế cô lập của nhân Linux (Namespaces, Cgroups v2, Seccomp, Chặn Privilege Escalation), Mạng ảo, Quản lý ảnh cục bộ, và các tính năng chẩn đoán đặc biệt khác.
 
 ---
 
@@ -22,7 +22,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Khởi chạy container**:
    ```bash
-   sudo target/release/crun run -t --net bridge --security denylist test-interactive examples/bundle
+   sudo target/release/minicrun run -t --net bridge --security denylist test-interactive examples/bundle
    ```
 2. **Kiểm tra card mạng (bên trong container)**:
    ```sh
@@ -52,7 +52,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 *   **Chế độ None (Cách ly mạng hoàn toàn)**:
     1. Khởi chạy:
        ```bash
-       sudo target/release/crun run -t --net none --security denylist test-net-none examples/bundle
+       sudo target/release/minicrun run -t --net none --security denylist test-net-none examples/bundle
        ```
     2. Kiểm tra mạng bên trong container:
        ```sh
@@ -61,13 +61,13 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
        *Yêu cầu*: Chỉ thấy giao tiếp loopback `lo`. Không có `eth0`. Gõ `exit` để thoát.
     3. Dọn dẹp:
        ```bash
-       sudo target/release/crun delete test-net-none
+       sudo target/release/minicrun delete test-net-none
        ```
 
 *   **Chế độ Host (Dùng chung mạng máy chủ)**:
     1. Khởi chạy:
        ```bash
-       sudo target/release/crun run -t --net host --security denylist test-net-host examples/bundle
+       sudo target/release/minicrun run -t --net host --security denylist test-net-host examples/bundle
        ```
     2. Kiểm tra mạng bên trong container:
        ```sh
@@ -76,7 +76,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
        *Yêu cầu*: Thấy toàn bộ card mạng thật của máy host (như `eth0`, `wlan0`, `lo`...). Gõ `exit` để thoát.
     3. Dọn dẹp:
        ```bash
-       sudo target/release/crun delete test-net-host
+       sudo target/release/minicrun delete test-net-host
        ```
 
 ---
@@ -87,7 +87,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 *   **Chế độ Denylist (Có seccomp chặn syscall)**:
     1. Khởi chạy:
        ```bash
-       sudo target/release/crun run -t --net none --security denylist test-sec-def examples/bundle
+       sudo target/release/minicrun run -t --net none --security denylist test-sec-def examples/bundle
        ```
     2. Thử thực hiện lệnh `mount` bên trong container:
        ```sh
@@ -96,13 +96,13 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
        *Yêu cầu*: Lệnh thất bại với lỗi `Permission denied` hoặc `Operation not permitted`. Gõ `exit` để thoát.
     3. Dọn dẹp:
        ```bash
-       sudo target/release/crun delete test-sec-def
+       sudo target/release/minicrun delete test-sec-def
        ```
 
 *   **Chế độ Unconfined (Tắt Seccomp bảo mật)**:
     1. Khởi chạy:
        ```bash
-       sudo target/release/crun run -t --net none --security unconfined test-sec-uncon examples/bundle
+       sudo target/release/minicrun run -t --net none --security unconfined test-sec-uncon examples/bundle
        ```
     2. Thử thực hiện lệnh `mount` bên trong container:
        ```sh
@@ -112,7 +112,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
        *Yêu cầu*: Lệnh thực hiện thành công và phân vùng tmpfs mới được mount vào `/mnt`. Gõ `exit` để thoát.
     3. Dọn dẹp:
        ```bash
-       sudo target/release/crun delete test-sec-uncon
+       sudo target/release/minicrun delete test-sec-uncon
        ```
 
 ---
@@ -122,7 +122,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Khởi chạy container**:
    ```bash
-   sudo target/release/crun run -t --net none --security denylist test-pid-limit examples/bundle
+   sudo target/release/minicrun run -t --net none --security denylist test-pid-limit examples/bundle
    ```
 2. **Kiểm tra giới hạn tối đa số PIDs (bên trong container)**:
    ```sh
@@ -137,7 +137,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    *Yêu cầu*: Hệ thống sẽ báo lỗi `sh: can't fork` hoặc `Resource temporarily unavailable` sau khi chạm mốc giới hạn, chứng minh Cgroups v2 PIDs limit hoạt động chính xác. Gõ `exit` để thoát (hoặc tắt container).
 4. **Dọn dẹp**:
    ```bash
-   sudo target/release/crun delete test-pid-limit
+   sudo target/release/minicrun delete test-pid-limit
    ```
 
 ---
@@ -147,34 +147,34 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Tạo container ở trạng thái chờ (`created`)**:
    ```bash
-   sudo target/release/crun create --net none --security denylist test-detached examples/bundle
+   sudo target/release/minicrun create --net none --security denylist test-detached examples/bundle
    ```
 2. **Kiểm tra trạng thái**:
    ```bash
-   sudo target/release/crun state test-detached --json
+   sudo target/release/minicrun state test-detached --json
    ```
    *Yêu cầu*: Trạng thái hiển thị `"status": "created"`.
 3. **Khởi động container**:
    ```bash
-   sudo target/release/crun start test-detached
+   sudo target/release/minicrun start test-detached
    ```
 4. **Kiểm tra trạng thái đang chạy**:
    ```bash
-   sudo target/release/crun state test-detached --json
+   sudo target/release/minicrun state test-detached --json
    ```
    *Yêu cầu*: Trạng thái hiển thị `"status": "running"`.
 5. **Thực thi lệnh vào container đang chạy (Exec)**:
    ```bash
-   sudo target/release/crun exec test-detached ps aux
+   sudo target/release/minicrun exec test-detached ps aux
    ```
    *Yêu cầu*: Hiển thị danh sách tiến trình đang chạy trong container.
 6. **Dừng container**:
    ```bash
-   sudo target/release/crun stop test-detached --timeout 2
+   sudo target/release/minicrun stop test-detached --timeout 2
    ```
 7. **Xóa container**:
    ```bash
-   sudo target/release/crun delete test-detached
+   sudo target/release/minicrun delete test-detached
    ```
 
 ---
@@ -184,16 +184,16 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Tạo container**:
    ```bash
-   sudo target/release/crun create --net none --security denylist test-inspect examples/bundle
+   sudo target/release/minicrun create --net none --security denylist test-inspect examples/bundle
    ```
 2. **Kiểm tra cấu hình an ninh**:
    ```bash
-   sudo target/release/crun inspect-security test-inspect
+   sudo target/release/minicrun inspect-security test-inspect
    ```
    *Yêu cầu*: Báo cáo hiển thị rõ ràng thông số: `NoNewPrivs: true`, `Seccomp: denylist`, các `Capabilities` bị drop, các thông số Cgroup Limits.
 3. **Dọn dẹp**:
    ```bash
-   sudo target/release/crun delete test-inspect
+   sudo target/release/minicrun delete test-inspect
    ```
 
 ---
@@ -203,18 +203,18 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Tạo và khởi chạy container ngầm**:
    ```bash
-   sudo target/release/crun create --net none --security denylist test-diff examples/bundle
-   sudo target/release/crun start test-diff
+   sudo target/release/minicrun create --net none --security denylist test-diff examples/bundle
+   sudo target/release/minicrun start test-diff
    ```
 2. **Tạo, sửa đổi và xóa tập tin bên trong container**:
    ```bash
-   sudo target/release/crun exec test-diff touch /new_file.txt
-   sudo target/release/crun exec test-diff sh -c "echo 'changed' > /etc/hostname"
-   sudo target/release/crun exec test-diff rm /etc/hosts
+   sudo target/release/minicrun exec test-diff touch /new_file.txt
+   sudo target/release/minicrun exec test-diff sh -c "echo 'changed' > /etc/hostname"
+   sudo target/release/minicrun exec test-diff rm /etc/hosts
    ```
 3. **Xem các thay đổi (Diff)**:
    ```bash
-   sudo target/release/crun diff test-diff
+   sudo target/release/minicrun diff test-diff
    ```
    *Yêu cầu*: Đầu ra hiển thị rõ ràng:
    *   `A /new_file.txt` (Added)
@@ -222,7 +222,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    *   `D /etc/hosts` (Deleted)
 4. **Dọn dẹp**:
    ```bash
-   sudo target/release/crun stop test-diff
+   sudo target/release/minicrun stop test-diff
    ```
 
 ---
@@ -232,23 +232,23 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Khởi chạy container ngầm chạy một vòng lặp**:
    ```bash
-   sudo target/release/crun create --net none --security denylist test-trace examples/bundle
-   sudo target/release/crun start test-trace
+   sudo target/release/minicrun create --net none --security denylist test-trace examples/bundle
+   sudo target/release/minicrun start test-trace
    ```
 2. **Theo dõi thông tin tiến trình**:
    ```bash
-   sudo target/release/crun trace test-trace
+   sudo target/release/minicrun trace test-trace
    ```
    *Yêu cầu*: Hiển thị sơ đồ cây tiến trình PID và tài nguyên tiêu thụ từ `/proc`.
 3. **Theo dõi bằng strace (nếu máy có cài `strace`)**:
    ```bash
-   sudo target/release/crun trace test-trace --strace --duration-ms 2000
+   sudo target/release/minicrun trace test-trace --strace --duration-ms 2000
    ```
    *Yêu cầu*: Bắt được các cuộc gọi hệ thống (syscall) mà tiến trình container đang thực hiện trong vòng 2 giây.
 4. **Dọn dẹp**:
    ```bash
-   sudo target/release/crun stop test-trace
-   sudo target/release/crun delete test-trace
+   sudo target/release/minicrun stop test-trace
+   sudo target/release/minicrun delete test-trace
    ```
 
 ---
@@ -260,30 +260,30 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    ```bash
    tar -C examples/bundle/rootfs -cf /tmp/my-image.tar .
    ```
-2. **Import ảnh vào `crun`**:
+2. **Import ảnh vào `minicrun`**:
    ```bash
-   sudo target/release/crun image import /tmp/my-image.tar local-alpine
+   sudo target/release/minicrun image import /tmp/my-image.tar local-alpine
    ```
 3. **Xem danh sách ảnh**:
    ```bash
-   sudo target/release/crun image list
+   sudo target/release/minicrun image list
    ```
    *Yêu cầu*: Hiển thị ảnh `local-alpine` trong bảng danh sách.
 4. **Khởi chạy trực tiếp từ ảnh cục bộ**:
    ```bash
-   sudo target/release/crun run-image -t local-alpine test-img-run
+   sudo target/release/minicrun run-image -t local-alpine test-img-run
    ```
    *Yêu cầu*: Bạn chui được vào shell của container. Gõ `exit` để thoát.
 5. **Dọn dẹp**:
    ```bash
-   sudo target/release/crun delete test-img-run
+   sudo target/release/minicrun delete test-img-run
    rm -f /tmp/my-image.tar
    ```
 
 ---
 
 ### Kịch Bản 10: Tự Động Phục Hồi Tài Nguyên Rác (Doctor Mode)
-*Kiểm chứng: Khả năng phát hiện và tự động giải phóng tài nguyên rác của `crun`.*
+*Kiểm chứng: Khả năng phát hiện và tự động giải phóng tài nguyên rác của `minicrun`.*
 
 1. **Tạo tài nguyên rác giả lập**:
    Tạo thư mục trạng thái giả của một container không tồn tại tiến trình thực tế:
@@ -293,17 +293,17 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    ```
 2. **Chạy chẩn đoán lỗi**:
    ```bash
-   sudo target/release/crun doctor
+   sudo target/release/minicrun doctor
    ```
    *Yêu cầu*: Phát hiện ra container `stale-container` bị mồ côi (tình trạng chết lâm sàng - Orphan/Stale).
 3. **Thực thi phục hồi sửa lỗi tự động**:
    ```bash
-   sudo target/release/crun doctor --fix
+   sudo target/release/minicrun doctor --fix
    ```
-   *Yêu cầu*: `crun` tự động dọn dẹp thư mục `/run/crun-rs/stale-container` và các tài nguyên liên quan.
+   *Yêu cầu*: `minicrun` tự động dọn dẹp thư mục `/run/crun-rs/stale-container` và các tài nguyên liên quan.
 4. **Xác nhận lại**:
    ```bash
-   sudo target/release/crun doctor
+   sudo target/release/minicrun doctor
    ```
    *Yêu cầu*: Báo cáo hệ thống hoàn toàn sạch sẽ (`No stale resources detected`).
 
@@ -314,18 +314,18 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Khởi chạy container**:
    ```bash
-   sudo target/release/crun create --net none --security denylist test-health examples/bundle
-   sudo target/release/crun start test-health
+   sudo target/release/minicrun create --net none --security denylist test-health examples/bundle
+   sudo target/release/minicrun start test-health
    ```
 2. **Theo dõi sức khỏe thời gian thực (Watch)**:
    ```bash
-   sudo target/release/crun health test-health --watch --interval-ms 1000
+   sudo target/release/minicrun health test-health --watch --interval-ms 1000
    ```
    *Yêu cầu*: Lệnh chạy lặp lại liên tục, in trạng thái sức khỏe container (`healthy` / `unhealthy` dựa trên cấu hình healthcheck trong `config.json`). Nhấn `Ctrl + C` để thoát theo dõi.
 3. **Dọn dẹp**:
    ```bash
-   sudo target/release/crun stop test-health
-   sudo target/release/crun delete test-health
+   sudo target/release/minicrun stop test-health
+   sudo target/release/minicrun delete test-health
    ```
 
 ---
@@ -335,7 +335,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Chạy kiểm định gói bundle chuẩn**:
    ```bash
-   target/release/crun validate examples/bundle
+   target/release/minicrun validate examples/bundle
    ```
    *Yêu cầu*: In ra kết quả hợp lệ cùng các cảnh báo warnings cho các trường không được hỗ trợ (nếu có).
 2. **Tạo và kiểm định file cấu hình lỗi**:
@@ -343,7 +343,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    ```bash
    mkdir -p /tmp/bad-bundle
    echo '{"ociVersion": "1.0.0"}' > /tmp/bad-bundle/config.json
-   target/release/crun validate /tmp/bad-bundle
+   target/release/minicrun validate /tmp/bad-bundle
    ```
    *Yêu cầu*: Lệnh kết thúc với thông báo lỗi rõ ràng về việc thiếu các trường bắt buộc như `process` hoặc `root`.
 3. **Dọn dẹp**:
@@ -358,7 +358,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Chạy container ở chế độ học**:
    ```bash
-   sudo target/release/crun run --net none --log on \
+   sudo target/release/minicrun run --net none --log on \
      --seccomp learn --seccomp-out /tmp/learn.json \
      learn-demo examples/bundle
    ```
@@ -371,12 +371,12 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    *Yêu cầu*: `events` > 0, `unique` vài chục syscall, và `execve` xuất hiện ít nhất 1 lần (chính là lệnh exec của container).
 3. **Kiểm tra log vẫn thu được** (đây là chỗ dễ hỏng nhất: tracer sở hữu `waitpid(-1)` nên nuốt cả exit status của log helper):
    ```bash
-   sudo target/release/crun logs learn-demo
+   sudo target/release/minicrun logs learn-demo
    ```
    *Yêu cầu*: In ra output của container, không treo.
 4. **Dọn dẹp**:
    ```bash
-   sudo target/release/crun delete learn-demo
+   sudo target/release/minicrun delete learn-demo
    ```
 
 ---
@@ -386,7 +386,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **Sinh profile từ capture**:
    ```bash
-   sudo target/release/crun seccomp generate --capture /tmp/learn.json \
+   sudo target/release/minicrun seccomp generate --capture /tmp/learn.json \
      -o /tmp/learn.seccomp.json --name demo
    ```
    *Yêu cầu*: In ra `allowed_count`, `observed_syscalls`, `baseline_syscalls`. Tổng phải bằng `observed + baseline`.
@@ -397,20 +397,20 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    *Yêu cầu*: `defaultAction` là `SCMP_ACT_ERRNO`, `architectures` chứa `SCMP_ARCH_X86_64`. File này phải dùng được nguyên vẹn với runc.
 3. **Chạy lại dưới profile vừa sinh**:
    ```bash
-   sudo target/release/crun run --net none --log on \
+   sudo target/release/minicrun run --net none --log on \
      --seccomp enforce --seccomp-profile /tmp/learn.seccomp.json \
      enforce-demo examples/bundle
-   sudo target/release/crun logs enforce-demo
+   sudo target/release/minicrun logs enforce-demo
    ```
    *Yêu cầu*: Container chạy đúng như lần học, output giống hệt.
 4. **Xác nhận syscall ngoài profile bị chặn**:
    ```bash
-   sudo target/release/crun inspect-security enforce-demo
+   sudo target/release/minicrun inspect-security enforce-demo
    ```
    *Yêu cầu*: Báo `seccomp_runtime_mode: enforce` và `seccomp_allowed_syscalls` bằng số syscall trong profile.
 5. **Dọn dẹp**:
    ```bash
-   sudo target/release/crun delete enforce-demo
+   sudo target/release/minicrun delete enforce-demo
    ```
 
 ---
@@ -420,7 +420,7 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
 
 1. **So với profile mặc định của Docker**:
    ```bash
-   target/release/crun seccomp compare /tmp/learn.seccomp.json \
+   target/release/minicrun seccomp compare /tmp/learn.seccomp.json \
      --baseline third_party/moby-profiles/seccomp/default.json \
      --cve-map data/cve-syscall-map.json
    ```
@@ -434,10 +434,10 @@ Toàn bộ các lệnh dưới đây đều thực hiện từ thư mục gốc 
    *Yêu cầu*: 0 error. Các warning `confidence is medium` là nhắc nhở phải đối chiếu NVD trước khi đưa số vào báo cáo.
 4. **Chế độ dry-run** (đo false-denial mà không làm gãy workload):
    ```bash
-   sudo target/release/crun doctor | grep -i seccomp || echo "kernel hỗ trợ SECCOMP_RET_LOG"
-   sudo target/release/crun run --net none --log on \
+   sudo target/release/minicrun doctor | grep -i seccomp || echo "kernel hỗ trợ SECCOMP_RET_LOG"
+   sudo target/release/minicrun run --net none --log on \
      --seccomp enforce --seccomp-profile /tmp/learn.seccomp.json \
      --seccomp-action log dryrun-demo examples/bundle
-   sudo target/release/crun delete dryrun-demo
+   sudo target/release/minicrun delete dryrun-demo
    ```
    *Yêu cầu*: Container chạy bình thường; syscall lẽ ra bị chặn được ghi vào audit log thay vì bị từ chối.
